@@ -86,12 +86,24 @@ jobs:
       - name: Package
         run: helm package ${{ env.CHART_DIR }} -d dist
 
-      - name: Log in to GHCR (OCI)
+      # Two separate logins because two tools read credentials from two
+      # different config files:
+      #   - `helm push`             → ~/.config/helm/registry/config.json
+      #   - `actions/attest-build-provenance` (oras-go under the hood)
+      #                             → ~/.docker/config.json
+      - name: Log in to GHCR for helm
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             helm registry login ${{ env.REGISTRY }} \
               --username "${{ github.actor }}" \
               --password-stdin
+
+      - name: Log in to GHCR for the attestation push
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push chart to OCI registry
         id: push
