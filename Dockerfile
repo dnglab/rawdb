@@ -8,16 +8,14 @@ RUN npm install -g corepack@latest && \
     corepack enable && \
     corepack prepare yarn@4.1.0 --activate
 
-COPY frontend/package.json frontend/yarn.lock ./
-
-RUN --mount=type=cache,mode=0777,uid=1001,gid=0,target=/usr/local/share/.cache/yarn \
-    yarn install --immutable
-
+# Copy the lockfile + yarn config first so the global-cache mount on the
+# install step does most of the work; then bring the rest of the source
+# in and build in the same layer so yarn's `.yarn/install-state.gz` is
+# always present for `yarn build`.
+COPY frontend/package.json frontend/yarn.lock frontend/.yarnrc.yml ./
 COPY frontend/ ./
-RUN --mount=type=cache,mode=0777,uid=1001,gid=0,target=/usr/local/share/.cache/yarn \
-    --mount=type=cache,mode=0777,uid=1001,gid=0,target=public \
-    --mount=type=cache,mode=0777,uid=1001,gid=0,target=.cache \
-    yarn build
+RUN --mount=type=cache,mode=0777,target=/usr/local/share/.cache/yarn \
+    yarn install --immutable && yarn build
 
 # --- Stage 2: backend -----------------------------------------------------------
 FROM rust:1.95.0-alpine3.23 AS backend
