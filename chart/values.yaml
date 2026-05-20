@@ -95,6 +95,7 @@ config:
 #   RAWDB_ADMIN_PASSWORD       OR   RAWDB_ADMIN_PASSWORD_HASH (prefer hash)
 #   RAWDB_SESSION_KEY          (≥32 bytes hex; `openssl rand -hex 32`)
 #   RAWDB_OIDC_CLIENT_SECRET   (only if config.oidc.enabled)
+#   RAWDB_GITHUB_CLIENT_SECRET (only if config.github.enabled)
 # ---------------------------------------------------------------------------
 secret:
   create: true
