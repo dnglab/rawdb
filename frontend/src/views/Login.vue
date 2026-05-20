@@ -7,6 +7,7 @@ const router = useRouter();
 const { refresh } = useAuth();
 
 const oidcEnabled = ref(false);
+const githubEnabled = ref(false);
 const passwordEnabled = ref(true);
 const password = ref('');
 const msg = ref<string | null>(null);
@@ -16,12 +17,17 @@ onMounted(async () => {
   try {
     const res = await fetch('/auth/methods');
     if (res.ok) {
-      const j = (await res.json()) as { password: boolean; oidc: boolean };
+      const j = (await res.json()) as {
+        password: boolean;
+        oidc: boolean;
+        github: boolean;
+      };
       passwordEnabled.value = j.password === true;
       oidcEnabled.value = j.oidc === true;
+      githubEnabled.value = j.github === true;
     }
   } catch {
-    /* leave defaults: password on, oidc off — matches the fail-safe path */
+    /* leave defaults: password on, others off — fail-safe */
   }
 });
 
@@ -75,13 +81,22 @@ async function loginPassword() {
           />
         </form>
 
-        <template v-if="oidcEnabled">
+        <template v-if="oidcEnabled || githubEnabled">
           <Divider v-if="passwordEnabled" align="center"
             ><span class="muted">or</span></Divider
           >
-          <a href="/auth/oidc/start" class="sso">
+          <a v-if="oidcEnabled" href="/auth/oidc/start" class="sso">
             <Button
               label="Sign in with SSO"
+              icon="pi pi-key"
+              severity="secondary"
+              outlined
+              fluid
+            />
+          </a>
+          <a v-if="githubEnabled" href="/auth/github/start" class="sso">
+            <Button
+              label="Sign in with GitHub"
               icon="pi pi-github"
               severity="secondary"
               outlined

@@ -7,6 +7,7 @@ use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
 mod auth;
+mod auth_github;
 mod auth_oidc;
 mod cache;
 mod config;
@@ -45,6 +46,7 @@ async fn main() -> Result<()> {
     let metrics = Arc::new(AppMetrics::new());
     let scanner = Scanner::new(db.clone(), s3.clone(), &config, metrics.clone());
     let oidc = auth_oidc::OidcClient::from_config(&config).await?;
+    let github = auth_github::GithubClient::from_config(&config)?;
 
     // Readiness flips to true after the first successful full scan.
     let (ready_tx, ready_rx) = watch::channel(false);
@@ -56,6 +58,7 @@ async fn main() -> Result<()> {
         s3,
         scanner: Arc::new(scanner),
         oidc: oidc.map(Arc::new),
+        github: github.map(Arc::new),
         ready: ready_rx,
         metrics,
     };

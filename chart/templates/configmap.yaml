@@ -34,4 +34,11 @@ data:
   RAWDB_OIDC_INITIAL_ADMIN_SUB: {{ . | quote }}
   {{- end }}
   {{- end }}
+  {{- if .Values.config.github.enabled }}
+  RAWDB_GITHUB_CLIENT_ID: {{ .Values.config.github.clientId | quote }}
+  RAWDB_GITHUB_REDIRECT_URL: {{ .Values.config.github.redirectUrl | quote }}
+  {{- with .Values.config.github.initialAdminSub }}
+  RAWDB_GITHUB_INITIAL_ADMIN_SUB: {{ . | quote }}
+  {{- end }}
+  {{- end }}
   RUST_LOG: {{ .Values.config.logLevel | quote }}

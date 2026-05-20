@@ -56,6 +56,8 @@ impl Modify for SecurityAddon {
         auth::oidc_enabled,
         auth::oidc_start_stub,
         auth::oidc_callback_stub,
+        auth::github_start,
+        auth::github_callback,
         // Admin — pending review
         admin::list_pending,
         admin::get_pending,

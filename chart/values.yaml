@@ -74,6 +74,16 @@ config:
     subFormat: raw
     initialAdminSub: ""
 
+  # GitHub OAuth 2.0 (not OIDC — GitHub doesn't issue id_token for user
+  # login). When all three credentials are supplied, /auth/github/start
+  # appears on the login screen. Canonical sub is `github:<login>`.
+  # Pair with `secret.data.githubClientSecret` (or your existingSecret).
+  github:
+    enabled: false
+    clientId: ""
+    redirectUrl: ""
+    initialAdminSub: ""
+
 # ---------------------------------------------------------------------------
 # Secret. Either let the chart create it from values (NOT recommended for
 # prod; values end up in cluster state and `helm get values`), or set
@@ -98,6 +108,7 @@ secret:
     adminPasswordHash: ""    # argon2 hash (preferred); takes precedence
     sessionKey: ""
     oidcClientSecret: ""
+    githubClientSecret: ""
 
 # ---------------------------------------------------------------------------
 # ServiceAccount

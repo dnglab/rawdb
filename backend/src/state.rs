@@ -6,6 +6,7 @@ use opentelemetry_sdk::metrics::SdkMeterProvider;
 use prometheus::Registry;
 use tokio::sync::watch;
 
+use crate::auth_github::GithubClient;
 use crate::auth_oidc::OidcClient;
 use crate::cache::db::Db;
 use crate::cache::scanner::Scanner;
@@ -21,6 +22,8 @@ pub struct AppState {
     pub scanner: Arc<Scanner>,
     /// `None` when OIDC is not configured.
     pub oidc: Option<Arc<OidcClient>>,
+    /// `None` when GitHub OAuth is not configured.
+    pub github: Option<Arc<GithubClient>>,
     /// Becomes `true` once the first full S3 scan completes; gates readiness probe.
     pub ready: watch::Receiver<bool>,
     pub metrics: Arc<AppMetrics>,

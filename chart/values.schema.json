@@ -92,6 +92,16 @@
             "subFormat": { "type": "string", "enum": ["raw", "github"] },
             "initialAdminSub": { "type": "string" }
           }
+        },
+        "github": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "clientId": { "type": "string" },
+            "redirectUrl": { "type": "string" },
+            "initialAdminSub": { "type": "string" }
+          }
         }
       }
     },
@@ -111,7 +121,8 @@
             "adminPassword": { "type": "string" },
             "adminPasswordHash": { "type": "string" },
             "sessionKey": { "type": "string" },
-            "oidcClientSecret": { "type": "string" }
+            "oidcClientSecret": { "type": "string" },
+            "githubClientSecret": { "type": "string" }
           }
         }
       }

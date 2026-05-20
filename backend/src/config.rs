@@ -132,6 +132,27 @@ pub struct Config {
     #[arg(long, env = "RAWDB_OIDC_INITIAL_ADMIN_SUB")]
     pub oidc_initial_admin_sub: Option<String>,
 
+    // ---- Auth: GitHub OAuth (optional, all-or-nothing) -----------------------
+    // GitHub isn't an OIDC provider for user login (no id_token, no
+    // discovery doc), so it gets its own code path next to OIDC. Set the
+    // three vars below to enable; the synthetic `sub` for these users is
+    // always `github:<login>`.
+    #[arg(long, env = "RAWDB_GITHUB_CLIENT_ID")]
+    pub github_client_id: Option<String>,
+
+    #[arg(long, env = "RAWDB_GITHUB_CLIENT_SECRET")]
+    pub github_client_secret: Option<String>,
+
+    #[arg(long, env = "RAWDB_GITHUB_REDIRECT_URL")]
+    pub github_redirect_url: Option<String>,
+
+    /// One-time bootstrap convenience: when no users file exists yet and a
+    /// successful GitHub login resolves to this sub (`github:<login>`),
+    /// the user is auto-provisioned with the `admin` role. Mirrors
+    /// `RAWDB_OIDC_INITIAL_ADMIN_SUB`.
+    #[arg(long, env = "RAWDB_GITHUB_INITIAL_ADMIN_SUB")]
+    pub github_initial_admin_sub: Option<String>,
+
     // ---- OpenAPI docs ---------------------------------------------------------
     /// Serve interactive OpenAPI docs at `/docs` and the spec at
     /// `/openapi.json`. Defaults to enabled — disable in locked-down
@@ -196,14 +217,33 @@ impl Config {
                  set all of RAWDB_OIDC_ISSUER_URL, _CLIENT_ID, _CLIENT_SECRET, _REDIRECT_URL — or none"
             );
         }
-        // Avoid locking everyone out: at least one login path must work.
-        if !self.password_auth_enabled && !self.oidc_enabled() {
+        // GitHub OAuth must also be all-or-nothing.
+        let gh_fields = [
+            self.github_client_id.is_some(),
+            self.github_client_secret.is_some(),
+            self.github_redirect_url.is_some(),
+        ];
+        let gh_count = gh_fields.iter().filter(|x| **x).count();
+        if gh_count != 0 && gh_count != 3 {
             bail!(
-                "RAWDB_PASSWORD_AUTH_ENABLED=false requires OIDC to be configured \
-                 (otherwise nobody can log in)"
+                "GitHub OAuth must be fully configured or fully absent; \
+                 set all of RAWDB_GITHUB_CLIENT_ID, _CLIENT_SECRET, _REDIRECT_URL — or none"
+            );
+        }
+        // Avoid locking everyone out: at least one login path must work.
+        if !self.password_auth_enabled && !self.oidc_enabled() && !self.github_enabled() {
+            bail!(
+                "RAWDB_PASSWORD_AUTH_ENABLED=false requires OIDC or GitHub OAuth \
+                 to be configured (otherwise nobody can log in)"
             );
         }
         Ok(())
+    }
+
+    pub fn github_enabled(&self) -> bool {
+        self.github_client_id.is_some()
+            && self.github_client_secret.is_some()
+            && self.github_redirect_url.is_some()
     }
 
     pub fn oidc_enabled(&self) -> bool {
