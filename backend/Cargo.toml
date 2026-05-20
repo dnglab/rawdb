@@ -78,5 +78,4 @@ oidc = ["dep:openidconnect"]
 
 [profile.release]
 lto = "thin"
-codegen-units = 1
 strip = true
