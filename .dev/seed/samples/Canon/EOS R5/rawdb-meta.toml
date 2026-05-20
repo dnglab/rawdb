@@ -1,0 +1,19 @@
+# Hand-authored example: no `set.id`, no per-file `size`.
+[set]
+maker = "Canon"
+model = "EOS R5"
+license = "CC0-1.0"
+notes = "Example set seeded by docker compose."
+
+[[files]]
+path = "raw_modes/IMG_0001.cr3"
+tags = ["lossless", "14bits", "3:2", "dual-pixel"]
+
+[[files]]
+path = "raw_modes/IMG_0002.cr3"
+tags = ["lossy", "high-iso", "14bits", "3:2"]
+
+[[files]]
+path = "crm/MVI_0001.crm"
+notes = "Canon raw movie."
+tags = ["lossless", "12bits", "16:9"]

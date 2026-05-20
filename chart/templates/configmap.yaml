@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rawdb.fullname" . }}
+  labels: {{- include "rawdb.labels" . | nindent 4 }}
+data:
+  RAWDB_BIND: {{ .Values.config.bind | quote }}
+  RAWDB_METRICS_BIND: {{ .Values.config.metricsBind | quote }}
+  RAWDB_STATIC_DIR: {{ .Values.config.staticDir | quote }}
+  RAWDB_CACHE_DIR: {{ .Values.config.cacheDir | quote }}
+  RAWDB_RESCAN_SECS: {{ .Values.config.rescanSecs | quote }}
+  RAWDB_SCAN_CONCURRENCY: {{ .Values.config.scanConcurrency | quote }}
+  RAWDB_UPLOAD_MODE: {{ .Values.config.uploadMode | quote }}
+  RAWDB_DOWNLOAD_MODE: {{ .Values.config.downloadMode | quote }}
+  RAWDB_PRESIGN_TTL_SECS: {{ .Values.config.presignTtlSecs | quote }}
+  RAWDB_PENDING_TTL_DAYS: {{ .Values.config.pendingTtlDays | quote }}
+  RAWDB_BLOCKED_EXTENSIONS: {{ .Values.config.blockedExtensions | quote }}
+  RAWDB_TAGS_SUGGESTED: {{ .Values.config.tagsSuggested | quote }}
+  RAWDB_SESSION_TTL_SECS: {{ .Values.config.sessionTtlSecs | quote }}
+  RAWDB_PASSWORD_AUTH_ENABLED: {{ .Values.config.passwordAuthEnabled | quote }}
+  RAWDB_DOCS_ENABLED: {{ .Values.config.docsEnabled | quote }}
+  RAWDB_S3_BUCKET: {{ .Values.config.s3.bucket | quote }}
+  RAWDB_S3_REGION: {{ .Values.config.s3.region | quote }}
+  RAWDB_S3_PATH_STYLE: {{ .Values.config.s3.pathStyle | quote }}
+  {{- with .Values.config.s3.endpoint }}
+  RAWDB_S3_ENDPOINT: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.config.oidc.enabled }}
+  RAWDB_OIDC_ISSUER_URL: {{ .Values.config.oidc.issuerUrl | quote }}
+  RAWDB_OIDC_CLIENT_ID: {{ .Values.config.oidc.clientId | quote }}
+  RAWDB_OIDC_REDIRECT_URL: {{ .Values.config.oidc.redirectUrl | quote }}
+  RAWDB_OIDC_SUB_FORMAT: {{ .Values.config.oidc.subFormat | quote }}
+  {{- with .Values.config.oidc.initialAdminSub }}
+  RAWDB_OIDC_INITIAL_ADMIN_SUB: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  RUST_LOG: {{ .Values.config.logLevel | quote }}

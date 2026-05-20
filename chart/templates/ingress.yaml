@@ -1,0 +1,39 @@
+{{- if .Values.ingress.enabled -}}
+{{- $mwAnno := include "rawdb.traefikIngressMiddlewareAnnotation" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "rawdb.fullname" . }}
+  labels: {{- include "rawdb.labels" . | nindent 4 }}
+  {{- if or .Values.ingress.annotations $mwAnno }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if $mwAnno }}
+    traefik.ingress.kubernetes.io/router.middlewares: {{ $mwAnno | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path | quote }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "rawdb.fullname" $ }}
+                port:
+                  name: http
+          {{- end }}
+    {{- end }}
+{{- end }}

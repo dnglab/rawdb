@@ -1,0 +1,23 @@
+# Non-camera sample set: software-generated DNGs exercising every
+# predictor. Hidden from browsing unless "Show non-camera samples" is on.
+[set]
+maker = "dnglab"
+model = "full-predictor-set"
+license = "CC0-1.0"
+notes = "Software-generated samples covering all DNG predictors."
+special = true
+
+[[files]]
+path = "raw_modes/predictor_01.dng"
+notes = "Predictor 1 (no prediction)."
+tags = ["lossless", "predictor-1", "synthetic"]
+
+[[files]]
+path = "raw_modes/predictor_07_jpeg.dng"
+notes = "Lossless JPEG predictor."
+tags = ["lossless", "predictor-7", "synthetic"]
+
+[[files]]
+path = "errors/truncated.dng"
+notes = "Deliberately truncated file for decoder error-path testing."
+tags = ["error-trigger", "synthetic"]

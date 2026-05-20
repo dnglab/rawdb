@@ -1,0 +1,10 @@
+[set]
+maker = "Nikon"
+model = "Z 9"
+license = "CC0-1.0"
+uploaded_by = "github:example"
+notes = "Example pending upload."
+
+[[files]]
+path = "raw_modes/DSC_0001.nef"
+tags = ["lossless", "14bits", "3:2"]

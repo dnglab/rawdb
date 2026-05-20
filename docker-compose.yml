@@ -1,0 +1,109 @@
+# Local dev stack: Garage (S3-compatible) + RawDB.
+#
+# Usage with podman:
+#   podman compose up --build
+#   open http://localhost:8080
+#
+# Service dependency chain:
+#   garage  →  garage-init (one-shot bootstrap: layout + bucket + key)
+#                         →  seed (uploads .dev/seed/*)
+#                                →  rawdb (the app)
+#
+# Garage requires `layout assign` + `layout apply` on first start; the
+# garage-init container runs that idempotently. Re-running `compose up`
+# is safe — every init step is a no-op once already applied.
+
+services:
+  garage:
+    build:
+      context: .
+      dockerfile: .dev/garage/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3900:3900"  # S3 API
+      - "3901:3901"  # RPC
+      - "3903:3903"  # admin API
+    volumes:
+      - ./.dev/garage/data:/var/lib/garage/data
+      - ./.dev/garage/meta:/var/lib/garage/meta
+      - ./.dev/garage.toml:/etc/garage.toml:ro
+    entrypoint: ["/garage"]
+    command: ["server", "--single-node"]
+    # The custom image bundles the `/garage` binary on debian-slim, so the
+    # CLI can probe the daemon's own RPC (config read from /etc/garage.toml).
+    # `garage status` succeeds as soon as RPC is up — before layout is
+    # applied — which is exactly the "daemon listening" gate garage-init
+    # needs. A `/health`-style check would deadlock, since it stays 503
+    # until garage-init applies the layout.
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  # One-shot bootstrap: assign + apply the cluster layout, create the
+  # bucket, import the static dev key, grant access. Idempotent — every
+  # step is a no-op once already applied, so re-runs are safe. Reuses the
+  # garage image (built by the `garage` service) for the `/garage` CLI.
+  garage-init:
+    build:
+      context: .
+      dockerfile: .dev/garage/Dockerfile
+    depends_on:
+      garage:
+        condition: service_healthy
+    volumes:
+      - ./.dev/garage.toml:/etc/garage.toml:ro
+      - ./.dev/garage-init.sh:/garage-init.sh:ro
+    entrypoint: ["/bin/sh", "/garage-init.sh"]
+    restart: "no"
+
+  seed:
+    image: amazon/aws-cli:2.17.0
+    depends_on:
+      garage-init:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: GKDEV0000000000000000000
+      AWS_SECRET_ACCESS_KEY: dev-secret-key-dev-secret-key-dev-secret-
+      AWS_DEFAULT_REGION: garage
+      GARAGE_ENDPOINT: http://garage:3900
+      RAWDB_BUCKET: rawdb
+    entrypoint: ["/bin/bash", "/seed.sh"]
+    volumes:
+      - ./.dev/seed.sh:/seed.sh:ro
+      - ./.dev/seed:/seed:ro
+    restart: "no"
+
+  # rawdb needs the bucket + access key (created by garage-init) and a
+  # reachable Garage; it does NOT need the seed sample data to boot —
+  # RAWDB_RESCAN_SECS picks those up shortly after. Depending on the
+  # health-gated long-running `garage` plus the single completed
+  # `garage-init` keeps the dependency graph shallow, which podman
+  # resolves far more reliably than a multi-level completed-container
+  # chain through `seed`.
+  rawdb:
+    build: .
+    depends_on:
+      garage:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      RAWDB_BIND: 0.0.0.0:8080
+      RAWDB_METRICS_BIND: 0.0.0.0:9090
+      RAWDB_S3_BUCKET: rawdb
+      RAWDB_S3_ENDPOINT: http://garage:3900
+      RAWDB_S3_REGION: garage
+      RAWDB_S3_ACCESS_KEY: GKDEV0000000000000000000
+      RAWDB_S3_SECRET_KEY: dev-secret-key-dev-secret-key-dev-secret-
+      RAWDB_S3_PATH_STYLE: "true"
+      RAWDB_UPLOAD_MODE: "stream"
+      RAWDB_DOWNLOAD_MODE: "stream"
+      RAWDB_RESCAN_SECS: "30"
+      RAWDB_ADMIN_PASSWORD: "dev"
+      RAWDB_SESSION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      RUST_LOG: rawdb=debug,tower_http=info

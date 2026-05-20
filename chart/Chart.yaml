@@ -1,0 +1,24 @@
+apiVersion: v2
+name: rawdb
+description: Community camera RAW sample sharing site — backend + bundled SPA.
+type: application
+
+# `version` is the chart version (bump on chart template changes).
+# `appVersion` tracks the rawdb image tag this chart was last validated against.
+version: 0.1.0
+appVersion: "0.1.0"
+
+home: https://github.com/dnglab/rawdb
+sources:
+  - https://github.com/dnglab/rawdb
+maintainers:
+  - name: cytrinox
+    url: https://github.com/dnglab
+
+icon: https://raw.githubusercontent.com/dnglab/rawdb/main/frontend/public/favicon.svg
+
+keywords:
+  - rawdb
+  - raw
+  - camera
+  - photography

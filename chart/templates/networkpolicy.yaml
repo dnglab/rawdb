@@ -1,0 +1,30 @@
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rawdb.fullname" . }}
+  labels: {{- include "rawdb.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "rawdb.selectorLabels" . | nindent 6 }}
+  policyTypes: {{- toYaml .Values.networkPolicy.policyTypes | nindent 4 }}
+  ingress:
+    {{- with .Values.networkPolicy.ingress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.networkPolicy.prometheusSelector }}
+    - from:
+        - {{- toYaml . | nindent 10 }}
+      ports:
+        - protocol: TCP
+          port: 9090
+    {{- end }}
+  egress:
+    {{- with .Values.networkPolicy.egress }}
+    {{- toYaml . | nindent 4 }}
+    {{- else }}
+    # Permissive default: needed for S3 + (optional) OIDC. Tighten to your
+    # bucket/IdP CIDRs by setting `networkPolicy.egress` explicitly.
+    - {}
+    {{- end }}
+{{- end }}

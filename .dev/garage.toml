@@ -1,0 +1,27 @@
+# Minimal single-node Garage config for local dev only.
+# DO NOT use in production.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "1799bccfd7411eddcf9ebd1e1d2c3e9b1799bccfd7411eddcf9ebd1e1d2c3e9b"
+
+[s3_api]
+api_bind_addr = "[::]:3900"
+s3_region = "garage"
+root_domain = ".s3.garage.localhost"
+
+[admin]
+api_bind_addr = "[::]:3902"
+admin_token = "dev-admin-token"
+metrics_token = "dev-metrics-token"
+
+[s3_web]
+bind_addr = "[::]:3903"
+root_domain = ".web.garage.localhost"
+index = "index.html"

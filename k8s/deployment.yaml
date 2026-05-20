@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rawdb
+  namespace: rawdb
+  labels:
+    app: rawdb
+spec:
+  replicas: 2
+  # The cache lives in /tmp (emptyDir) so any pod can be replaced without
+  # data loss; recreate is fine, but rolling-update is what you want.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: rawdb
+  template:
+    metadata:
+      labels:
+        app: rawdb
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: rawdb
+          image: ghcr.io/dnglab/rawdb:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: rawdb-config
+            - secretRef:
+                name: rawdb-secret
+          volumeMounts:
+            - name: cache
+              mountPath: /tmp/rawdb-cache
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 60   # allow up to 5 min for initial scan
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: cache
+          emptyDir: {}

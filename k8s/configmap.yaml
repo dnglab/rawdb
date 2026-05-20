@@ -1,0 +1,30 @@
+# Non-secret configuration. Pair with secret.yaml for credentials.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rawdb-config
+  namespace: rawdb
+data:
+  RAWDB_BIND: "0.0.0.0:8080"
+  RAWDB_STATIC_DIR: "/app/static"
+  RAWDB_CACHE_DIR: "/tmp/rawdb-cache"
+  RAWDB_S3_REGION: "us-east-1"
+  RAWDB_S3_PATH_STYLE: "true"
+  RAWDB_RESCAN_SECS: "300"
+  RAWDB_SCAN_CONCURRENCY: "16"
+  RAWDB_METRICS_BIND: "0.0.0.0:9090"
+  RAWDB_UPLOAD_MODE: "either"
+  # presigned (default) | stream | either (client opts in via ?stream=1)
+  RAWDB_DOWNLOAD_MODE: "presigned"
+  RAWDB_PRESIGN_TTL_SECS: "3600"
+  RAWDB_PENDING_TTL_DAYS: "14"
+  RAWDB_SESSION_TTL_SECS: "86400"
+  # Denylist of extensions that may NOT be uploaded (everything else is
+  # allowed — RAW formats are too numerous to allowlist). Matches the
+  # binary's default.
+  RAWDB_BLOCKED_EXTENSIONS: "zip,tar,gz,tgz,txt,exe,pdf,rar,7z,bz2,xz"
+  # When set, the first OIDC login from this sub becomes admin automatically.
+  # Comment out once the user has been created via the UI.
+  # RAWDB_OIDC_INITIAL_ADMIN_SUB: "github:cytrinox"
+  # RAWDB_OIDC_SUB_FORMAT: "github"
+  RUST_LOG: "rawdb=info,tower_http=info"

@@ -1,0 +1,383 @@
+# Default values for rawdb. Defaults aim for a secure, multi-replica
+# production deployment: non-root, read-only rootfs, dropped capabilities,
+# anti-affinity across zones, and a PodDisruptionBudget. S3 credentials and
+# the bootstrap admin secret MUST be supplied via `secret` (preferred:
+# point `secret.existingSecret` at a pre-created Secret managed outside
+# the chart, e.g. via SOPS / External Secrets / Vault).
+
+# ---------------------------------------------------------------------------
+# Image
+# ---------------------------------------------------------------------------
+image:
+  repository: ghcr.io/dnglab/rawdb
+  # Pinned to chart.appVersion if left empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+  # SHA digest can be supplied to pin by content rather than tag.
+  digest: ""
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Two replicas is the safe minimum for the rolling-update strategy + PDB.
+replicaCount: 2
+
+# ---------------------------------------------------------------------------
+# rawdb configuration. These map 1:1 to RAWDB_* env vars.
+# ---------------------------------------------------------------------------
+config:
+  bind: "0.0.0.0:8080"
+  # Metrics + health probes are served on a separate port so the main
+  # listener can stay behind an Ingress without exposing /metrics publicly.
+  metricsBind: "0.0.0.0:9090"
+  staticDir: /app/static
+  # `cacheDir` is per-pod and rebuilt from S3 on startup; emptyDir is fine.
+  cacheDir: /tmp/rawdb-cache
+  rescanSecs: 300
+  scanConcurrency: 16
+  uploadMode: either        # presigned | stream | either
+  downloadMode: presigned   # presigned | stream | either
+  presignTtlSecs: 3600
+  pendingTtlDays: 14
+  blockedExtensions: "zip,tar,gz,tgz,txt,exe,pdf,rar,7z,bz2,xz"
+  # Operator-curated tags. Always present in /api/tags with
+  # `suggested: true`, even when no current set uses them; the frontend
+  # merges them with the top-N most-used tags.
+  tagsSuggested: "lossy,lossless,uncompressed"
+  sessionTtlSecs: 86400
+  # Toggle the bootstrap-admin password login. Set to false for OIDC-only
+  # deployments — requires `config.oidc.enabled=true` and locks the chart
+  # from requiring `secret.data.adminPassword*` keys.
+  passwordAuthEnabled: true
+  logLevel: "rawdb=info,tower_http=info"
+
+  # Serve interactive OpenAPI docs at /docs and the spec at /openapi.json.
+  # Disable in locked-down environments where the docs surface shouldn't
+  # be exposed on the main listener.
+  docsEnabled: true
+
+  s3:
+    bucket: ""
+    # Set for non-AWS S3 backends (Garage, R2, B2, …). Empty = AWS.
+    endpoint: ""
+    region: us-east-1
+    pathStyle: true
+
+  oidc:
+    enabled: false
+    issuerUrl: ""
+    clientId: ""
+    redirectUrl: ""
+    # raw | github
+    subFormat: raw
+    initialAdminSub: ""
+
+# ---------------------------------------------------------------------------
+# Secret. Either let the chart create it from values (NOT recommended for
+# prod; values end up in cluster state and `helm get values`), or set
+# `existingSecret` to the name of a Secret you manage out-of-band.
+#
+# The Secret MUST contain the following keys (envFrom-mounted as env vars):
+#   RAWDB_S3_ACCESS_KEY
+#   RAWDB_S3_SECRET_KEY
+#   RAWDB_ADMIN_PASSWORD       OR   RAWDB_ADMIN_PASSWORD_HASH (prefer hash)
+#   RAWDB_SESSION_KEY          (≥32 bytes hex; `openssl rand -hex 32`)
+#   RAWDB_OIDC_CLIENT_SECRET   (only if config.oidc.enabled)
+# ---------------------------------------------------------------------------
+secret:
+  create: true
+  # When set, the Deployment uses this Secret and the chart does not render
+  # its own Secret resource. Required keys are listed above.
+  existingSecret: ""
+  data:
+    s3AccessKey: ""
+    s3SecretKey: ""
+    adminPassword: ""        # plaintext (dev/bootstrap only)
+    adminPasswordHash: ""    # argon2 hash (preferred); takes precedence
+    sessionKey: ""
+    oidcClientSecret: ""
+
+# ---------------------------------------------------------------------------
+# ServiceAccount
+# ---------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  # rawdb does not call the Kubernetes API; no token needed in the pod.
+  automountServiceAccountToken: false
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Pod / container metadata + security
+# ---------------------------------------------------------------------------
+podAnnotations: {}
+podLabels: {}
+
+priorityClassName: ""
+terminationGracePeriodSeconds: 30
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "1000m"
+    memory: "512Mi"
+
+# ---------------------------------------------------------------------------
+# Probes — point at the dedicated metrics/healthz listener.
+# ---------------------------------------------------------------------------
+livenessProbe:
+  httpGet:
+    path: /live
+    port: metrics
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 3
+  failureThreshold: 3
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: metrics
+  initialDelaySeconds: 2
+  periodSeconds: 5
+  timeoutSeconds: 3
+  # Allow up to 5 min for the initial S3 scan on a large bucket.
+  failureThreshold: 60
+startupProbe:
+  enabled: false
+  httpGet:
+    path: /live
+    port: metrics
+  periodSeconds: 5
+  failureThreshold: 60
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 80
+  metricsPort: 9090
+  annotations: {}
+  # Useful with type=LoadBalancer; harmless otherwise.
+  externalTrafficPolicy: ""
+  ipFamilyPolicy: ""
+  ipFamilies: []
+
+# ---------------------------------------------------------------------------
+# Ingress (classic networking.k8s.io/v1). Off by default.
+#
+# Ingress and `gateway` (below) are independent — enable either, both, or
+# neither. When `traefik.middlewares.enabled=true` and the IngressClass is
+# Traefik, the chart auto-appends a `traefik.ingress.kubernetes.io/
+# router.middlewares` annotation referencing the rendered middlewares.
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: rawdb.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: rawdb-tls
+  #    hosts: [rawdb.example.com]
+
+# ---------------------------------------------------------------------------
+# Gateway API (gateway.networking.k8s.io/v1). Off by default. The chart does
+# NOT render a Gateway — it expects one to exist already and renders a single
+# HTTPRoute that attaches to it via `parentRefs`.
+# ---------------------------------------------------------------------------
+gateway:
+  enabled: false
+  # Reference an existing Gateway (typically managed by the platform team).
+  parentRefs:
+    - name: ""               # required: existing Gateway name
+      namespace: ""          # optional: defaults to release namespace
+      sectionName: ""        # optional: a specific listener
+      # port: 443
+  hostnames:
+    - rawdb.example.com
+  annotations: {}
+  # Path matches for the HTTPRoute. Default: everything.
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      # Optional extra filters (e.g. URL rewrite). Traefik middleware
+      # ExtensionRef filters are appended automatically when enabled below.
+      filters: []
+
+# ---------------------------------------------------------------------------
+# Traefik Middlewares (traefik.io/v1alpha1). Opt-in. When `middlewares.enabled`
+# is true, the chart renders one Middleware per enabled sub-section and wires
+# them into the Ingress (via annotation) and/or HTTPRoute (via ExtensionRef
+# filters) automatically. Order in attachment: rateLimit → secureHeaders →
+# compression.
+# ---------------------------------------------------------------------------
+traefik:
+  middlewares:
+    enabled: false
+
+    rateLimit:
+      enabled: true
+      # Requests/period averaged per source; burst is the absolute peak.
+      average: 100
+      burst: 200
+      period: 1s
+      # Match Traefik defaults: per source IP.
+      sourceCriterion: {}
+      #   ipStrategy:
+      #     depth: 1
+
+    secureHeaders:
+      enabled: true
+      # Conservative, browser-safe defaults — adjust per your TLS/CDN setup.
+      browserXssFilter: true
+      contentTypeNosniff: true
+      frameDeny: true
+      referrerPolicy: "strict-origin-when-cross-origin"
+      stsSeconds: 31536000
+      stsIncludeSubdomains: true
+      stsPreload: false
+      contentSecurityPolicy: ""
+      permissionsPolicy: ""
+      # Free-form passthrough; merged into spec.headers.
+      customResponseHeaders: {}
+      customRequestHeaders: {}
+
+    compression:
+      enabled: true
+      # Traefik v3 negotiates Accept-Encoding against this list in order.
+      encodings: ["br", "zstd", "gzip"]
+      minResponseBodyBytes: 1024
+      # Optional content-type allow/deny lists.
+      includedContentTypes: []
+      excludedContentTypes: []
+
+# ---------------------------------------------------------------------------
+# HorizontalPodAutoscaler
+# ---------------------------------------------------------------------------
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  # Optional behavior tuning; passed through verbatim when set.
+  behavior: {}
+
+# ---------------------------------------------------------------------------
+# PodDisruptionBudget — enabled by default because the safe minimum is 2.
+# ---------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  # Set maxUnavailable instead to override.
+  maxUnavailable: ""
+
+# ---------------------------------------------------------------------------
+# Scheduling: by default prefer spreading pods across nodes and zones.
+# ---------------------------------------------------------------------------
+nodeSelector: {}
+tolerations: []
+
+# Soft anti-affinity on hostname so two replicas avoid the same node when
+# possible but the scheduler will still place them if it has to.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: rawdb
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: rawdb
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: rawdb
+
+# ---------------------------------------------------------------------------
+# NetworkPolicy
+#
+# Defaults to disabled because cluster-wide network policies vary. When
+# enabled, allows ingress to the http port from the configured namespaces/
+# pod selectors and to the metrics port from `prometheusSelector`; allows
+# egress to S3 (and OIDC if configured) — restrict further with `egress`.
+# ---------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  # Example: allow ingress from a Prometheus operator namespace+selector.
+  prometheusSelector: {}
+  egress: []
+
+# ---------------------------------------------------------------------------
+# Prometheus Operator ServiceMonitor
+# ---------------------------------------------------------------------------
+serviceMonitor:
+  enabled: false
+  namespace: ""
+  interval: 30s
+  scrapeTimeout: 10s
+  honorLabels: false
+  labels: {}
+  metricRelabelings: []
+  relabelings: []
+
+# ---------------------------------------------------------------------------
+# Extra mounts and env (escape hatches)
+# ---------------------------------------------------------------------------
+extraEnv: []
+extraEnvFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+# Volume that backs the SQLite cache. emptyDir is the recommended default
+# because the cache is rebuilt from S3 on every pod start; use a PVC only
+# if you have a specific reason to persist it across restarts.
+cacheVolume:
+  emptyDir:
+    sizeLimit: 4Gi

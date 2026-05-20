@@ -1,0 +1,135 @@
+/* Global base layer. PrimeVue design tokens (--p-*) do the theming;
+   this only sets the page chrome and a couple of layout utilities. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--p-surface-100);
+  color: var(--p-text-color);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica,
+    Arial, sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--p-primary-600);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Centered, width-constrained content column. */
+.page {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 1.75rem 1.25rem 3rem;
+  flex: 1 0 auto;
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 1rem 0.85rem 2rem;
+  }
+}
+
+/* Hero band on the landing page. */
+.hero {
+  background:
+    linear-gradient(
+      135deg,
+      var(--p-primary-50) 0%,
+      var(--p-surface-0) 70%
+    );
+  border: 1px solid var(--p-surface-200);
+  border-radius: 14px;
+  padding: 2.25rem 2rem;
+  margin-bottom: 1.5rem;
+}
+.hero h1 {
+  margin: 0 0 0.4rem;
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+}
+.hero p {
+  margin: 0;
+  color: var(--p-text-muted-color);
+  font-size: 1.05rem;
+}
+
+/* Stat tiles. */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0 1.75rem;
+}
+.stat-card {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  background: var(--p-surface-0);
+  border: 1px solid var(--p-surface-200);
+  border-radius: 12px;
+  padding: 1.1rem 1.25rem;
+}
+.stat-card .stat-icon {
+  display: grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 10px;
+  background: var(--p-primary-50);
+  color: var(--p-primary-600);
+  font-size: 1.2rem;
+  flex: none;
+}
+.stat-card .stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.stat-card .stat-label {
+  color: var(--p-text-muted-color);
+  font-size: 0.85rem;
+}
+
+/* Lets wide DataTables scroll instead of overflowing on small screens. */
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.muted {
+  color: var(--p-text-muted-color);
+}
+
+.app-footer {
+  flex: none;
+  border-top: 1px solid var(--p-surface-200);
+  padding: 1rem 1.25rem;
+  text-align: center;
+  color: var(--p-text-muted-color);
+  font-size: 0.85rem;
+  background: var(--p-surface-0);
+}

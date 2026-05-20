@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server error</title>
+<style>
+  :root { color-scheme: light dark; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #0f1115; color: #e6e6e6;
+  }
+  main { text-align: center; padding: 2rem; max-width: 32rem; }
+  .code { font-size: 5rem; font-weight: 700; letter-spacing: -0.04em; margin: 0; color: #f06a6a; }
+  h1 { font-size: 1.4rem; font-weight: 600; margin: 0.25rem 0 0.75rem; }
+  p { margin: 0 0 1.5rem; color: #9aa0aa; }
+  a {
+    display: inline-block; padding: 0.55rem 1.1rem; border-radius: 0.5rem;
+    background: #f06a6a; color: #0f1115; text-decoration: none; font-weight: 600;
+  }
+  a:hover { background: #ff8585; }
+</style>
+</head>
+<body>
+<main>
+  <p class="code">5xx</p>
+  <h1>Something went wrong</h1>
+  <p>The server hit an unexpected error. Please try again in a moment.</p>
+  <a href="/">Go to home</a>
+</main>
+</body>
+</html>

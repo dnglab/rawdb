@@ -1,0 +1,29 @@
+RawDB has been installed.
+
+  Release:   {{ .Release.Name }}
+  Namespace: {{ .Release.Namespace }}
+  Image:     {{ include "rawdb.image" . }}
+  Replicas:  {{ .Values.replicaCount }}{{ if .Values.autoscaling.enabled }} (autoscaled: {{ .Values.autoscaling.minReplicas }}–{{ .Values.autoscaling.maxReplicas }}){{ end }}
+
+{{- if not .Values.secret.existingSecret }}
+
+  ⚠ The chart rendered its own Secret from values. For production, set
+    `secret.existingSecret` to a Secret managed outside of Helm (e.g. via
+    External Secrets / SOPS / Vault) so credentials don't appear in
+    `helm get values`.
+{{- end }}
+
+API (port {{ .Values.service.port }}):
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rawdb.fullname" . }} 8080:{{ .Values.service.port }}
+  open http://localhost:8080
+
+Metrics + health probes (port {{ .Values.service.metricsPort }}):
+  /live, /ready, /healthz, /metrics
+
+{{- if .Values.ingress.enabled }}
+
+Ingress hosts:
+{{- range .Values.ingress.hosts }}
+  https://{{ .host }}
+{{- end }}
+{{- end }}

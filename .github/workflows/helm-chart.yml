@@ -1,0 +1,117 @@
+name: helm-chart
+
+# Publishes the chart as an OCI artifact to GHCR so it lives next to the
+# container image: `oci://ghcr.io/<owner>/charts/rawdb`. Pull with
+# `helm pull oci://ghcr.io/<owner>/charts/rawdb --version <x.y.z>`.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+    paths:
+      - 'chart/**'
+      - '.github/workflows/helm-chart.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'chart/**'
+      - '.github/workflows/helm-chart.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  # `<owner>` is normalized to lower-case below (ghcr rejects uppercase).
+  CHART_DIR: chart
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - name: helm lint
+        run: helm lint ${{ env.CHART_DIR }}
+      - name: helm template (smoke render)
+        run: helm template rawdb ${{ env.CHART_DIR }} > /dev/null
+
+  publish:
+    needs: lint
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Resolve owner (lower-case) and chart version
+        id: vars
+        run: |
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          # On a tag push, derive chart + appVersion from the tag (strip leading `v`).
+          # Otherwise keep the version recorded in Chart.yaml and append a
+          # short commit SHA so main-branch builds are addressable but never
+          # collide with a real release.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            ver="${GITHUB_REF_NAME#v}"
+            echo "version=$ver" >> "$GITHUB_OUTPUT"
+            echo "app_version=$ver" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            base=$(awk '/^version:/ {print $2; exit}' ${{ env.CHART_DIR }}/Chart.yaml)
+            echo "version=${base}-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "app_version=${base}" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stamp Chart.yaml
+        run: |
+          sed -i "s/^version:.*/version: ${{ steps.vars.outputs.version }}/" \
+            ${{ env.CHART_DIR }}/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"${{ steps.vars.outputs.app_version }}\"/" \
+            ${{ env.CHART_DIR }}/Chart.yaml
+          grep -E '^(version|appVersion):' ${{ env.CHART_DIR }}/Chart.yaml
+
+      - name: Helm dependency update
+        run: helm dependency update ${{ env.CHART_DIR }}
+
+      - name: Package
+        run: helm package ${{ env.CHART_DIR }} -d dist
+
+      - name: Log in to GHCR (OCI)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            helm registry login ${{ env.REGISTRY }} \
+              --username "${{ github.actor }}" \
+              --password-stdin
+
+      - name: Push chart to OCI registry
+        id: push
+        run: |
+          out=$(helm push \
+            "dist/rawdb-${{ steps.vars.outputs.version }}.tgz" \
+            "oci://${{ env.REGISTRY }}/${{ steps.vars.outputs.owner }}/charts" 2>&1)
+          echo "$out"
+          digest=$(echo "$out" | awk '/^Digest:/ {print $2}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest chart provenance
+        if: steps.push.outputs.digest != ''
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ steps.vars.outputs.owner }}/charts/rawdb
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Upload chart tarball to release
+        if: steps.vars.outputs.is_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/rawdb-${{ steps.vars.outputs.version }}.tgz
+          fail_on_unmatched_files: true

@@ -1,0 +1,35 @@
+backend/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Frontend
+node_modules/
+dist/
+.vite/
+*.local
+
+# Yarn 4 (node-modules linker): keep yarn.lock + .yarnrc.yml, drop the rest
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
+
+# Local runtime
+/tmp/
+/rawdb-cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Env
+.env
+.env.local
+
+.dev/garage/data/
+.dev/garage/meta/
+

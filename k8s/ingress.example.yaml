@@ -1,0 +1,29 @@
+# Example Ingress. Adjust the host, ingressClass, and TLS secret to match
+# your cluster's controller (nginx, traefik, etc.).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rawdb
+  namespace: rawdb
+  annotations:
+    # Generous body size for streaming uploads. Presigned-PUT mode bypasses
+    # the proxy and doesn't need this.
+    nginx.ingress.kubernetes.io/proxy-body-size: "2g"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - rawdb.example.com
+      secretName: rawdb-tls
+  rules:
+    - host: rawdb.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rawdb
+                port:
+                  name: http

@@ -1,0 +1,82 @@
+[package]
+name = "rawdb"
+version = "0.1.0"
+edition = "2021"
+description = "RAW sample sharing site — backend"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Web
+axum = { version = "0.7", features = ["macros", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "compression-gzip", "cors"] }
+hyper = "1"
+
+# Config / CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# S3
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1"
+aws-credential-types = "1"
+aws-smithy-runtime-api = "1"
+
+# DB / cache
+rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+# Auth
+argon2 = "0.5"
+jsonwebtoken = "9"
+openidconnect = { version = "3", features = ["reqwest"], optional = true }
+
+# Kubernetes
+kube = { version = "3.0.1", features = ["runtime", "derive"] }
+kube-lease-manager = "0.11.1"
+k8s-openapi = { version = "0.27.0", features = ["latest", "schemars"] }
+
+# Otel
+opentelemetry = { version = "0.31" }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-prometheus = "0.31"
+opentelemetry-semantic-conventions = "0.31"
+prometheus = "0.14"
+
+
+# Misc
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v7"] }
+rand = "0.8"
+url = "2"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+percent-encoding = "2"
+futures = "0.3"
+async-trait = "0.1"
+mime_guess = "2"
+
+# OpenAPI
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
+utoipa-swagger-ui = { version = "8", features = ["axum"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["oidc"]
+oidc = ["dep:openidconnect"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
