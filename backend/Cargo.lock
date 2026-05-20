@@ -3285,7 +3285,7 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "rawdb"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3304,6 +3304,7 @@ dependencies = [
  "kube",
  "kube-lease-manager",
  "mime_guess",
+ "oauth2",
  "openidconnect",
  "opentelemetry",
  "opentelemetry-prometheus",
@@ -3314,6 +3315,7 @@ dependencies = [
  "r2d2",
  "r2d2_sqlite",
  "rand 0.8.6",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
