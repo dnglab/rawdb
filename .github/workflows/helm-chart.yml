@@ -41,8 +41,10 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      packages: write
+      contents: write       # softprops/action-gh-release attaches the .tgz
+      packages: write       # helm push to GHCR
+      id-token: write       # OIDC token for build-provenance attestation
+      attestations: write   # write attestation to the registry
     steps:
       - uses: actions/checkout@v4
 
