@@ -32,17 +32,20 @@ use crate::error::{AppError, AppResult};
 use crate::meta;
 use crate::state::AppState;
 
-/// Max bytes the streaming endpoint will accept for a single file. The
-/// presigned-PUT path is the production path for large files; streaming
-/// is a fallback.
-const UPLOAD_BUFFER_LIMIT: usize = 1024 * 1024 * 1024; // 1 GiB
-
-pub fn router() -> Router<AppState> {
+pub fn router(max_upload_bytes: u64) -> Router<AppState> {
+    // The body-limit layer takes a `usize`; clamp to platform usize and
+    // give a small headroom over the configured limit so the handler's
+    // own check is the source of the 413 (cleaner error than axum's
+    // default "length limit exceeded").
+    let body_limit: usize = max_upload_bytes
+        .saturating_add(1024 * 1024)
+        .try_into()
+        .unwrap_or(usize::MAX);
     Router::new()
         .route("/upload/begin", post(begin))
         .route(
             "/upload/stream/:upload_id/*path",
-            put(stream).layer(DefaultBodyLimit::max(1 * 1024 * 1024 * 1024)),
+            put(stream).layer(DefaultBodyLimit::max(body_limit)),
         )
         .route("/upload/complete", post(complete))
 }
@@ -204,10 +207,11 @@ pub async fn stream(
     validate_upload_id(&upload_id)?;
     validate_rel_path(&file_path)?;
 
-    if body.len() > UPLOAD_BUFFER_LIMIT {
-        return Err(AppError::BadRequest(format!(
-            "upload exceeds {} bytes",
-            UPLOAD_BUFFER_LIMIT
+    let max = state.config.max_upload_bytes;
+    if (body.len() as u64) > max {
+        return Err(AppError::PayloadTooLarge(format!(
+            "file exceeds the maximum upload size of {} bytes",
+            max
         )));
     }
 
@@ -271,25 +275,38 @@ pub async fn complete(
         }
     }
 
-    // Verify every declared file exists under pending/<upload_id>/.
+    // Verify every declared file exists under the upload prefix, and that
+    // none of them exceeds the configured max size. The size check also
+    // catches presigned PUTs that bypass our streaming handler.
     let pending_prefix = format!("pending/{}/", req.upload_id);
     let objects = state
         .s3
         .list_objects(&pending_prefix)
         .await
         .map_err(AppError::Other)?;
-    let present: HashSet<String> = objects
-        .into_iter()
-        .filter_map(|o| {
-            o.key.strip_prefix(&pending_prefix).map(|s| s.to_string())
-        })
-        .collect();
+    let mut present: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
+    for o in objects {
+        if let Some(rel) = o.key.strip_prefix(&pending_prefix) {
+            present.insert(rel.to_string(), o.size);
+        }
+    }
+    let max = state.config.max_upload_bytes;
     for f in &parsed.files {
-        if !present.contains(&f.path) {
-            return Err(AppError::BadRequest(format!(
-                "declared file missing in S3: {}",
-                f.path
-            )));
+        match present.get(&f.path) {
+            None => {
+                return Err(AppError::BadRequest(format!(
+                    "declared file missing: {}",
+                    f.path
+                )));
+            }
+            Some(&size) if size > max => {
+                return Err(AppError::PayloadTooLarge(format!(
+                    "{} is {} bytes; maximum is {} bytes",
+                    f.path, size, max
+                )));
+            }
+            Some(_) => {}
         }
     }
 

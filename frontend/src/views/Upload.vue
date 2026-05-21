@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../api';
 import PageHeader from '../components/PageHeader.vue';
@@ -15,6 +15,12 @@ interface FileRow {
   tags: string[];
   // Optional per-file note.
   notesText: string;
+  // 0..100 — progress for this file's PUT. Stays at 0 while pending,
+  // becomes 100 on success; remains < 100 on error.
+  progress: number;
+  // Filled when the file is larger than `maxUploadBytes`. Blocks submit
+  // and shows under the row.
+  sizeError: string | null;
 }
 
 const router = useRouter();
@@ -32,6 +38,48 @@ const phase = ref<'form' | 'working' | 'done'>('form');
 const status = ref('');
 const err = ref<string | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
+
+// Server-published ceiling, fetched on mount. Acts as a client-side
+// guardrail so the user sees an error before the (potentially long)
+// upload kicks off; the server re-checks both at PUT time and at
+// finalize. 2 GiB is the backend default — used as a fail-safe.
+const maxUploadBytes = ref<number>(2 * 1024 * 1024 * 1024);
+
+function humanBytes(n: number): string {
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  // One decimal for non-byte units, zero for bytes.
+  return `${i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+}
+
+// Byte-weighted total across all files; matches the eye when one large
+// file dominates the upload.
+const overallProgress = computed(() => {
+  if (!rows.value.length) return 0;
+  let total = 0;
+  let done = 0;
+  for (const r of rows.value) {
+    total += r.file.size;
+    done += Math.floor((r.progress / 100) * r.file.size);
+  }
+  if (total === 0) return 0;
+  return Math.min(100, Math.round((done / total) * 100));
+});
+
+function checkSize(r: FileRow) {
+  if (r.file.size > maxUploadBytes.value) {
+    r.sizeError = `File is ${humanBytes(r.file.size)} — exceeds the ${humanBytes(
+      maxUploadBytes.value,
+    )} maximum.`;
+  } else {
+    r.sizeError = null;
+  }
+}
 
 const suggestedTags = ref<string[]>([]);
 
@@ -64,6 +112,14 @@ function onModelComplete(e: { query: string }) {
 }
 
 onMounted(async () => {
+  try {
+    const s = await api.stats();
+    if (typeof s.max_upload_bytes === 'number' && s.max_upload_bytes > 0) {
+      maxUploadBytes.value = s.max_upload_bytes;
+    }
+  } catch {
+    /* keep default fail-safe */
+  }
   try {
     // Suggestion chips = operator-curated tags (always shown) plus the
     // top-10 most-used tags from the data. `/api/tags` is sorted by
@@ -119,11 +175,15 @@ function onPick(e: Event) {
     if (existing.has(file.name)) continue; // dedupe by name, keep prior edits
     existing.add(file.name);
     const bitTag = bitTagFromName(file.name);
-    rows.value.push({
+    const row: FileRow = {
       file,
       tags: bitTag ? [bitTag] : [],
       notesText: '',
-    });
+      progress: 0,
+      sizeError: null,
+    };
+    checkSize(row);
+    rows.value.push(row);
   }
   // Allow re-picking the same file later (e.g. after removing it).
   input.value = '';
@@ -190,16 +250,49 @@ function validate(): string | null {
   const names = rows.value.map((r) => r.file.name);
   if (new Set(names).size !== names.length)
     return 'Duplicate file names — each file must have a distinct name.';
+  const bad = rows.value.filter((r) => r.sizeError);
+  if (bad.length) {
+    const names = bad.map((r) => r.file.name).join(', ');
+    return `Remove or replace oversized file(s): ${names}.`;
+  }
   return null;
 }
 
-async function putFile(url: string, file: File, sameOrigin: boolean) {
-  const res = await fetch(url, {
-    method: 'PUT',
-    body: file,
-    ...(sameOrigin ? { credentials: 'same-origin' as const } : {}),
+// XHR-based PUT so we can drive per-row progress from `upload.onprogress`.
+// `fetch` has no upload-side progress API yet across browsers; XHR is the
+// portable answer.
+function putFile(
+  url: string,
+  file: File,
+  sameOrigin: boolean,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url, true);
+    if (sameOrigin) xhr.withCredentials = true;
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded, e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(file.size, file.size);
+        resolve();
+      } else {
+        reject(
+          new Error(
+            `upload of ${file.name} failed (HTTP ${xhr.status}${
+              xhr.responseText ? `: ${xhr.responseText.slice(0, 200)}` : ''
+            })`,
+          ),
+        );
+      }
+    };
+    xhr.onerror = () =>
+      reject(new Error(`upload of ${file.name} failed (network error)`));
+    xhr.onabort = () => reject(new Error(`upload of ${file.name} aborted`));
+    xhr.send(file);
   });
-  if (!res.ok) throw new Error(`upload of ${file.name} failed (${res.status})`);
 }
 
 async function submit() {
@@ -225,12 +318,21 @@ async function submit() {
       const r = rows.value[i];
       const path = relPath(r);
       status.value = `Uploading ${r.file.name} (${i + 1}/${rows.value.length})…`;
+      const onProgress = (loaded: number, total: number) => {
+        // Direct mutation — `rows` holds reactive objects.
+        r.progress = total > 0 ? Math.round((loaded / total) * 100) : 0;
+      };
       const presigned = begin.urls?.[path];
       if (presigned) {
-        await putFile(presigned, r.file, false);
+        await putFile(presigned, r.file, false, onProgress);
       } else if (begin.stream_base) {
         const encoded = path.split('/').map(encodeURIComponent).join('/');
-        await putFile(`${begin.stream_base}/${encoded}`, r.file, true);
+        await putFile(
+          `${begin.stream_base}/${encoded}`,
+          r.file,
+          true,
+          onProgress,
+        );
       } else {
         throw new Error(`no upload URL for ${path}`);
       }
@@ -360,7 +462,31 @@ async function submit() {
             <div v-if="rows.length" class="table-scroll mt">
               <DataTable :value="rows" data-key="file.name">
                 <Column header="File">
-                  <template #body="{ data }">{{ data.file.name }}</template>
+                  <template #body="{ data }">
+                    <div class="file-cell">
+                      <div>{{ data.file.name }}</div>
+                      <Message
+                        v-if="data.sizeError"
+                        severity="error"
+                        :closable="false"
+                        size="small"
+                        class="row-msg"
+                      >
+                        {{ data.sizeError }}
+                      </Message>
+                      <ProgressBar
+                        v-else-if="phase === 'working'"
+                        :value="data.progress"
+                        class="row-progress"
+                        style="height: 4px"
+                      />
+                    </div>
+                  </template>
+                </Column>
+                <Column header="Size">
+                  <template #body="{ data }">
+                    <span class="muted">{{ humanBytes(data.file.size) }}</span>
+                  </template>
                 </Column>
                 <Column header="Tags">
                   <template #body="{ data }">
@@ -389,6 +515,9 @@ async function submit() {
                   </template>
                 </Column>
               </DataTable>
+              <div class="muted limit-hint">
+                Maximum file size: {{ humanBytes(maxUploadBytes) }}
+              </div>
             </div>
 
             <div class="submit">
@@ -398,13 +527,15 @@ async function submit() {
                 icon="pi pi-upload"
                 :loading="phase === 'working'"
               />
-              <span v-if="phase === 'working'" class="muted">{{ status }}</span>
+              <span v-if="phase === 'working'" class="muted">
+                {{ status }} — {{ overallProgress }}%
+              </span>
             </div>
             <ProgressBar
               v-if="phase === 'working'"
-              mode="indeterminate"
+              :value="overallProgress"
               class="mt"
-              style="height: 6px"
+              style="height: 8px"
             />
           </fieldset>
         </form>
@@ -476,6 +607,22 @@ async function submit() {
 }
 .done-actions {
   margin-top: 1rem;
+}
+.file-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 200px;
+}
+.row-progress {
+  width: 100%;
+}
+.row-msg {
+  margin: 0;
+}
+.limit-hint {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
 }
 @media (max-width: 640px) {
   .grid {

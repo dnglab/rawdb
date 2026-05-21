@@ -49,6 +49,8 @@ export interface Stats {
   pending: number;
   last_full_scan_at: string | null;
   ready: boolean;
+  /// Server-enforced ceiling on a single uploaded file, in bytes.
+  max_upload_bytes: number;
 }
 
 export interface SearchParams {

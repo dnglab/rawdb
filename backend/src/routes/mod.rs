@@ -29,7 +29,7 @@ pub mod upload;
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         .merge(public::router())
-        .merge(upload::router())
+        .merge(upload::router(state.config.max_upload_bytes))
         .nest("/admin", admin::router());
 
     // Interactive OpenAPI docs. Gated by `RAWDB_DOCS_ENABLED` so locked-down

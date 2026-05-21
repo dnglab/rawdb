@@ -59,6 +59,7 @@
         "downloadMode": { "type": "string", "enum": ["presigned", "stream", "either"] },
         "presignTtlSecs": { "type": "integer", "minimum": 1 },
         "pendingTtlDays": { "type": "integer", "minimum": 0 },
+        "maxUploadBytes": { "type": "integer", "minimum": 1 },
         "blockedExtensions": {
           "type": "string",
           "description": "Comma-separated denylist of file extensions."

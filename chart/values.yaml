@@ -41,6 +41,10 @@ config:
   downloadMode: presigned   # presigned | stream | either
   presignTtlSecs: 3600
   pendingTtlDays: 14
+  # Hard ceiling on a single uploaded file. Enforced server-side and
+  # surfaced via /api/stats so the upload form refuses oversized files
+  # before the PUT. Default 2 GiB.
+  maxUploadBytes: 2147483648
   blockedExtensions: "zip,tar,gz,tgz,txt,exe,pdf,rar,7z,bz2,xz"
   # Operator-curated tags. Always present in /api/tags with
   # `suggested: true`, even when no current set uses them; the frontend
@@ -310,10 +314,10 @@ autoscaling:
   behavior: {}
 
 # ---------------------------------------------------------------------------
-# PodDisruptionBudget — enabled by default because the safe minimum is 2.
+# PodDisruptionBudget — disabled by default.
 # ---------------------------------------------------------------------------
 podDisruptionBudget:
-  enabled: true
+  enabled: false
   minAvailable: 1
   # Set maxUnavailable instead to override.
   maxUnavailable: ""

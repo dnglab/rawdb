@@ -141,6 +141,10 @@ pub struct StatsResponse {
     pub pending: u64,
     pub last_full_scan_at: Option<chrono::DateTime<chrono::Utc>>,
     pub ready: bool,
+    /// Server-enforced ceiling on a single uploaded file, in bytes. The
+    /// upload form refuses files larger than this client-side; the server
+    /// re-checks at upload time and again at finalize.
+    pub max_upload_bytes: u64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -410,6 +414,7 @@ pub async fn stats(State(state): State<AppState>) -> AppResult<Json<StatsRespons
         pending: state.db.count_pending().map_err(AppError::Other)?,
         last_full_scan_at: state.db.last_full_scan_at().map_err(AppError::Other)?,
         ready: state.is_ready(),
+        max_upload_bytes: state.config.max_upload_bytes,
     }))
 }
 

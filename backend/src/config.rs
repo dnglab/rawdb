@@ -68,6 +68,15 @@ pub struct Config {
     #[arg(long, env = "RAWDB_PENDING_TTL_DAYS", default_value_t = 14)]
     pub pending_ttl_days: u64,
 
+    /// Hard ceiling on a single uploaded file, in bytes. Enforced
+    /// server-side on the streaming upload path (rejected with 413) and
+    /// when finalizing the upload (every declared file's stored size is
+    /// HEADed and rejected if it exceeds this); also published via
+    /// `/api/stats` so the client can refuse oversized files before the
+    /// PUT. Default 2 GiB.
+    #[arg(long, env = "RAWDB_MAX_UPLOAD_BYTES", default_value_t = 2 * 1024 * 1024 * 1024)]
+    pub max_upload_bytes: u64,
+
     /// Denylist of file extensions that may NOT be uploaded. Everything else
     /// is accepted (RAW formats are too numerous to allowlist). Compared
     /// case-insensitively against the final path extension; `gz`/`tgz` cover
