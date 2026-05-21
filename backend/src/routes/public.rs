@@ -8,7 +8,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::cache::db::{SetQuery, SetSummary};
+use crate::cache::db::{SetQuery, SetSummary, SortField, SortOrder};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -39,6 +39,12 @@ pub(crate) struct SearchParams {
     pub tags: Option<String>,
     /// `1`/`true` includes non-camera ("special") sets (default: hidden).
     pub include_special: Option<String>,
+    /// Column to sort by: `maker`, `model`, `license`, `file_count`,
+    /// `total_size`, or `tags`. Unknown values fall back to the default
+    /// `(maker, model)` ordering.
+    pub sort: Option<String>,
+    /// `asc` (default) or `desc`.
+    pub order: Option<String>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }
@@ -54,6 +60,19 @@ impl SearchParams {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let sort_field = self.sort.as_deref().and_then(|s| match s {
+            "maker" => Some(SortField::Maker),
+            "model" => Some(SortField::Model),
+            "license" => Some(SortField::License),
+            "file_count" => Some(SortField::FileCount),
+            "total_size" => Some(SortField::TotalSize),
+            "tags" => Some(SortField::Tags),
+            _ => None,
+        });
+        let sort_order = match self.order.as_deref() {
+            Some("desc") | Some("DESC") => SortOrder::Desc,
+            _ => SortOrder::Asc,
+        };
         SetQuery {
             maker: self.maker,
             model: self.model,
@@ -65,6 +84,8 @@ impl SearchParams {
                 self.include_special.as_deref(),
                 Some("1") | Some("true")
             ),
+            sort_field,
+            sort_order,
             limit: self.limit,
             offset: self.offset,
         }

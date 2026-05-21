@@ -63,6 +63,10 @@ export interface SearchParams {
   tags?: string;
   /** Include non-camera ("special") sets. Omitted/false hides them. */
   include_special?: string;
+  /// One of: maker | model | license | file_count | total_size | tags.
+  sort?: string;
+  /// asc | desc.
+  order?: string;
   limit?: number;
   offset?: number;
 }

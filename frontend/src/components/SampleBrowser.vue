@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import type { DataTablePageEvent } from 'primevue/datatable';
+import type {
+  DataTablePageEvent,
+  DataTableSortEvent,
+} from 'primevue/datatable';
 import { api, formatBytes, type SearchParams, type SetSummary } from '../api';
 
 const router = useRouter();
@@ -23,6 +26,14 @@ const loading = ref(false);
 const err = ref<string | null>(null);
 const includeSpecial = ref(false);
 
+// PrimeVue's lazy DataTable emits a sort event whose `sortField` matches
+// the column's `field` prop (when set) or the `sortField` prop (when the
+// column has a custom body without a field). `sortOrder` is +1 for asc,
+// -1 for desc. We persist the active key in the same shape the backend
+// accepts (asc/desc strings) so a refresh round-trips cleanly.
+const sortField = ref<string | null>(null);
+const sortOrder = ref<1 | -1>(1);
+
 async function reload() {
   loading.value = true;
   err.value = null;
@@ -33,6 +44,10 @@ async function reload() {
       (params as Record<string, unknown>)[k] = v;
     }
     if (includeSpecial.value) params.include_special = '1';
+    if (sortField.value) {
+      params.sort = sortField.value;
+      params.order = sortOrder.value === -1 ? 'desc' : 'asc';
+    }
     const r = await api.listSets(params);
     sets.value = r.sets;
     total.value = r.total;
@@ -68,6 +83,14 @@ watch(
 function onPage(e: DataTablePageEvent) {
   filters.limit = e.rows;
   filters.offset = e.first;
+  reload();
+}
+
+function onSort(e: DataTableSortEvent) {
+  // Clicking the same header a third time clears sort (sortField undefined).
+  sortField.value = (e.sortField as string | null | undefined) ?? null;
+  sortOrder.value = (e.sortOrder as 1 | -1 | null | undefined) === -1 ? -1 : 1;
+  filters.offset = 0;
   reload();
 }
 
@@ -116,9 +139,13 @@ function openSet(s: SetSummary) {
         :first="filters.offset ?? 0"
         :total-records="total"
         :rows-per-page-options="[25, 50, 100]"
+        :sort-field="sortField ?? undefined"
+        :sort-order="sortOrder"
+        :remove-sortable-sort="true"
         data-key="model"
         row-hover
         @page="onPage"
+        @sort="onSort"
         @row-click="openSet($event.data as SetSummary)"
         class="mt"
       >
@@ -126,7 +153,7 @@ function openSet(s: SetSummary) {
           <span class="muted">No sets match those filters.</span>
         </template>
         <Column field="maker" header="Maker" sortable />
-        <Column header="Model">
+        <Column field="model" header="Model" sortable>
           <template #body="{ data }">
             <RouterLink
               :to="`/sets/${encodeURIComponent(data.maker)}/${encodeURIComponent(data.model)}`"
@@ -136,14 +163,14 @@ function openSet(s: SetSummary) {
             </RouterLink>
           </template>
         </Column>
-        <Column header="Files">
+        <Column field="file_count" header="Files" sortable>
           <template #body="{ data }">{{ data.file_count }}</template>
         </Column>
-        <Column header="Size">
+        <Column field="total_size" header="Size" sortable>
           <template #body="{ data }">{{ formatBytes(data.total_size) }}</template>
         </Column>
-        <Column field="license" header="License" />
-        <Column header="Tags">
+        <Column field="license" header="License" sortable />
+        <Column field="tags" header="Tags" sortable>
           <template #body="{ data }">
             <span class="tags">
               <Tag

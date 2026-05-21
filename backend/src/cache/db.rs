@@ -359,17 +359,31 @@ impl Db {
         let limit = q.limit.unwrap_or(50).clamp(1, 500) as i64;
         let offset = q.offset.unwrap_or(0).max(0) as i64;
 
+        // Tie-break on (maker, model) so a page boundary is deterministic
+        // even when the requested sort key has duplicates.
+        let order_by = match q.sort_field {
+            None => "s.maker COLLATE NOCASE ASC, s.model COLLATE NOCASE ASC".to_string(),
+            Some(field) => format!(
+                "{} {}, s.maker COLLATE NOCASE ASC, s.model COLLATE NOCASE ASC",
+                field.sql_expr(),
+                q.sort_order.sql_keyword(),
+            ),
+        };
+
         let sql = format!(
             "SELECT s.maker, s.model, s.license, s.notes, s.uploaded_at, s.uploaded_by,
                     COUNT(DISTINCT f.path) AS file_count,
                     COALESCE(SUM(f.size), 0) AS total_size,
-                    s.special
+                    s.special,
+                    (SELECT IFNULL(GROUP_CONCAT(DISTINCT tag), '')
+                       FROM tags t
+                       WHERE t.maker = s.maker AND t.model = s.model) AS sort_tags
              FROM sets s
              LEFT JOIN files f ON s.maker = f.maker AND s.model = f.model
              {fts_join}
              {where_sql}
              GROUP BY s.maker, s.model
-             ORDER BY s.maker, s.model
+             ORDER BY {order_by}
              LIMIT ? OFFSET ?"
         );
         let total_sql = format!(
@@ -776,8 +790,57 @@ pub struct SetQuery {
     pub fts: Option<String>,
     /// Include non-camera ("special") sets. Default `false` hides them.
     pub include_special: bool,
+    /// Whitelisted sort field. Unknown / `None` falls back to `(maker, model)`.
+    pub sort_field: Option<SortField>,
+    /// Sort direction; ignored when `sort_field` is `None`.
+    pub sort_order: SortOrder,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
+}
+
+/// Columns the browse table can sort by. Hard-coded whitelist so the
+/// HTTP layer can't inject arbitrary SQL via the `sort` query param.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortField {
+    Maker,
+    Model,
+    License,
+    FileCount,
+    TotalSize,
+    Tags,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortOrder {
+    #[default]
+    Asc,
+    Desc,
+}
+
+impl SortField {
+    /// Map to the SQL ORDER BY expression. Aggregates use the column alias
+    /// from the SELECT; text columns use COLLATE NOCASE so casing doesn't
+    /// dominate sort order. The `Tags` arm references a correlated
+    /// subquery alias added to the SELECT list below.
+    fn sql_expr(self) -> &'static str {
+        match self {
+            SortField::Maker => "s.maker COLLATE NOCASE",
+            SortField::Model => "s.model COLLATE NOCASE",
+            SortField::License => "s.license COLLATE NOCASE",
+            SortField::FileCount => "file_count",
+            SortField::TotalSize => "total_size",
+            SortField::Tags => "sort_tags COLLATE NOCASE",
+        }
+    }
+}
+
+impl SortOrder {
+    fn sql_keyword(self) -> &'static str {
+        match self {
+            SortOrder::Asc => "ASC",
+            SortOrder::Desc => "DESC",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
