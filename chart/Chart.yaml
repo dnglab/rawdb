@@ -5,8 +5,8 @@ type: application
 
 # `version` is the chart version (bump on chart template changes).
 # `appVersion` tracks the rawdb image tag this chart was last validated against.
-version: 0.1.1
-appVersion: "0.1.1"
+version: 0.1.2
+appVersion: "0.1.2"
 
 home: https://github.com/dnglab/rawdb
 sources:
