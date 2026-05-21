@@ -392,6 +392,7 @@ async function submit() {
                   complete-on-focus
                   placeholder="Choose or type a maker"
                   fluid
+                  :pt="{ dropdown: { tabindex: -1 } }"
                   @complete="onMakerComplete"
                 />
               </label>
@@ -404,6 +405,7 @@ async function submit() {
                   complete-on-focus
                   placeholder="Choose or type a model"
                   fluid
+                  :pt="{ dropdown: { tabindex: -1 } }"
                   @complete="onModelComplete"
                 />
               </label>
