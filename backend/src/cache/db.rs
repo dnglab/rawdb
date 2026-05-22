@@ -71,6 +71,7 @@ pub struct UserRow {
     pub added_at: Option<DateTime<Utc>>,
     pub added_by: Option<String>,
     pub roles: Vec<String>,
+    pub api_key_hash: Option<String>,
 }
 
 impl Db {
@@ -665,14 +666,15 @@ impl Db {
         tx.execute("DELETE FROM users", [])?;
         for u in users {
             tx.execute(
-                "INSERT INTO users(sub, display_name, blocked, added_at, added_by)
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO users(sub, display_name, blocked, added_at, added_by, api_key_hash)
+                 VALUES (?, ?, ?, ?, ?, ?)",
                 params![
                     &u.sub,
                     u.display_name.as_deref(),
                     u.blocked as i64,
                     u.added_at.map(|d| d.to_rfc3339()),
                     u.added_by.as_deref(),
+                    u.api_key_hash.as_deref(),
                 ],
             )?;
             for role in &u.roles {
@@ -733,31 +735,196 @@ impl Db {
         let conn = self.pool.get()?;
         let user = conn
             .query_row(
-                "SELECT sub, display_name, blocked, added_at, added_by
+                "SELECT sub, display_name, blocked, added_at, added_by, api_key_hash
                  FROM users WHERE sub = ?",
                 params![sub],
-                |r| {
-                    Ok(UserRow {
-                        sub: r.get(0)?,
-                        display_name: r.get(1)?,
-                        blocked: r.get::<_, i64>(2)? != 0,
-                        added_at: r
-                            .get::<_, Option<String>>(3)?
-                            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                            .map(|d| d.with_timezone(&Utc)),
-                        added_by: r.get(4)?,
-                        roles: vec![],
-                    })
-                },
+                row_to_user,
             )
             .optional()?;
         let Some(mut user) = user else { return Ok(None) };
-        let mut stmt = conn.prepare("SELECT role FROM user_roles WHERE sub = ?")?;
-        user.roles = stmt
-            .query_map(params![sub], |r| r.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        user.roles = self.load_roles(&conn, sub)?;
         Ok(Some(user))
     }
+
+    /// Look up the user owning a given API-key hash. Powers both the
+    /// download rate-limit bypass and the key-protected export endpoint.
+    pub fn find_user_by_api_key_hash(&self, hash: &str) -> Result<Option<UserRow>> {
+        let conn = self.pool.get()?;
+        let user = conn
+            .query_row(
+                "SELECT sub, display_name, blocked, added_at, added_by, api_key_hash
+                 FROM users WHERE api_key_hash = ?",
+                params![hash],
+                row_to_user,
+            )
+            .optional()?;
+        let Some(mut user) = user else { return Ok(None) };
+        let sub = user.sub.clone();
+        user.roles = self.load_roles(&conn, &sub)?;
+        Ok(Some(user))
+    }
+
+    fn load_roles(
+        &self,
+        conn: &rusqlite::Connection,
+        sub: &str,
+    ) -> Result<Vec<String>> {
+        let mut stmt = conn.prepare("SELECT role FROM user_roles WHERE sub = ?")?;
+        let roles = stmt
+            .query_map(params![sub], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(roles)
+    }
+
+    // ---- full export --------------------------------------------------------
+
+    /// Every approved set with all of its files — backs the key-protected
+    /// `/api/export` endpoint. Built from three bulk queries (sets, files,
+    /// tags) assembled in memory to avoid an N+1 over >10k sets.
+    pub fn export_all(&self) -> Result<Vec<ExportSet>> {
+        let conn = self.pool.get()?;
+
+        // Tags: (maker, model, file_path|NULL, tag). Set-level tags have a
+        // NULL file_path. Per the public model, a set's tag list is the
+        // union of all its tags; a file's list is its own per-file rows.
+        let mut tag_stmt = conn.prepare(
+            "SELECT maker, model, file_path, tag FROM tags",
+        )?;
+        let mut set_tags: HashMap<(String, String), Vec<String>> = HashMap::new();
+        let mut file_tags: HashMap<(String, String, String), Vec<String>> =
+            HashMap::new();
+        let tag_rows = tag_stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?;
+        for row in tag_rows {
+            let (maker, model, file_path, tag) = row?;
+            let sk = (maker.clone(), model.clone());
+            let st = set_tags.entry(sk).or_default();
+            if !st.contains(&tag) {
+                st.push(tag.clone());
+            }
+            if let Some(fp) = file_path {
+                file_tags.entry((maker, model, fp)).or_default().push(tag);
+            }
+        }
+
+        // Files, grouped by (maker, model).
+        let mut file_stmt = conn.prepare(
+            "SELECT maker, model, path, category, extension, size, license, notes
+             FROM files ORDER BY maker, model, category, path",
+        )?;
+        let mut files_by_set: HashMap<(String, String), Vec<ExportFile>> =
+            HashMap::new();
+        let file_rows = file_stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<String>>(7)?,
+            ))
+        })?;
+        for row in file_rows {
+            let (maker, model, path, category, extension, size, license, notes) =
+                row?;
+            let tags = file_tags
+                .get(&(maker.clone(), model.clone(), path.clone()))
+                .cloned()
+                .unwrap_or_default();
+            files_by_set
+                .entry((maker, model))
+                .or_default()
+                .push(ExportFile {
+                    path,
+                    category,
+                    extension,
+                    size: size.max(0) as u64,
+                    license,
+                    notes,
+                    tags,
+                });
+        }
+
+        // Sets.
+        let mut set_stmt = conn.prepare(
+            "SELECT maker, model, license, notes, uploaded_at, uploaded_by, special
+             FROM sets ORDER BY maker, model",
+        )?;
+        let set_rows = set_stmt.query_map([], |r| {
+            Ok(ExportSet {
+                maker: r.get(0)?,
+                model: r.get(1)?,
+                license: r.get(2)?,
+                notes: r.get(3)?,
+                uploaded_at: r
+                    .get::<_, Option<String>>(4)?
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|d| d.with_timezone(&Utc)),
+                uploaded_by: r.get(5)?,
+                special: r.get::<_, i64>(6)? != 0,
+                tags: Vec::new(),
+                files: Vec::new(),
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in set_rows {
+            let mut s = row?;
+            let key = (s.maker.clone(), s.model.clone());
+            s.tags = set_tags.remove(&key).unwrap_or_default();
+            s.files = files_by_set.remove(&key).unwrap_or_default();
+            out.push(s);
+        }
+        Ok(out)
+    }
+}
+
+fn row_to_user(r: &rusqlite::Row) -> rusqlite::Result<UserRow> {
+    Ok(UserRow {
+        sub: r.get(0)?,
+        display_name: r.get(1)?,
+        blocked: r.get::<_, i64>(2)? != 0,
+        added_at: r
+            .get::<_, Option<String>>(3)?
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+            .map(|d| d.with_timezone(&Utc)),
+        added_by: r.get(4)?,
+        roles: vec![],
+        api_key_hash: r.get(5)?,
+    })
+}
+
+/// One file in the `/api/export` payload.
+#[derive(Debug, Clone)]
+pub struct ExportFile {
+    pub path: String,
+    pub category: String,
+    pub extension: Option<String>,
+    pub size: u64,
+    pub license: Option<String>,
+    pub notes: Option<String>,
+    pub tags: Vec<String>,
+}
+
+/// One set in the `/api/export` payload, with all its files.
+#[derive(Debug, Clone)]
+pub struct ExportSet {
+    pub maker: String,
+    pub model: String,
+    pub license: String,
+    pub notes: Option<String>,
+    pub uploaded_at: Option<DateTime<Utc>>,
+    pub uploaded_by: Option<String>,
+    pub special: bool,
+    pub tags: Vec<String>,
+    pub files: Vec<ExportFile>,
 }
 
 #[derive(Debug, Clone)]
@@ -946,12 +1113,14 @@ CREATE TABLE IF NOT EXISTS pending_files (
 );
 
 CREATE TABLE IF NOT EXISTS users (
-    sub          TEXT PRIMARY KEY,
-    display_name TEXT,
-    blocked      INTEGER NOT NULL DEFAULT 0,
-    added_at     TEXT,
-    added_by     TEXT
+    sub           TEXT PRIMARY KEY,
+    display_name  TEXT,
+    blocked       INTEGER NOT NULL DEFAULT 0,
+    added_at      TEXT,
+    added_by      TEXT,
+    api_key_hash  TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash);
 CREATE TABLE IF NOT EXISTS user_roles (
     sub  TEXT NOT NULL,
     role TEXT NOT NULL,
@@ -1129,6 +1298,7 @@ mod tests {
             added_at: None,
             added_by: Some("bootstrap:admin".into()),
             roles: vec!["admin".into()],
+            api_key_hash: None,
         }];
         db.replace_users(Some("etag-u1"), &users).unwrap();
         assert_eq!(db.get_users_etag().unwrap().as_deref(), Some("etag-u1"));

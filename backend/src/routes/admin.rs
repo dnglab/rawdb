@@ -806,6 +806,7 @@ pub async fn add_user(
             added_at: Some(chrono::Utc::now()),
             added_by: Some(actor_sub.clone()),
             roles: roles.clone(),
+            api_key_hash: None,
         });
         Ok(())
     })
@@ -906,14 +907,16 @@ pub async fn delete_user(
 
 fn validate_roles(roles: &[String]) -> AppResult<()> {
     for r in roles {
-        if !matches!(r.as_str(), "admin" | "reviewer") {
+        // `unlimited`: may hold a personal API key (download rate-limit
+        // bypass + access to /api/export).
+        if !matches!(r.as_str(), "admin" | "reviewer" | "unlimited") {
             return Err(AppError::BadRequest(format!("unknown role: {r}")));
         }
     }
     Ok(())
 }
 
-fn map_users_error(e: UsersError) -> AppError {
+pub(crate) fn map_users_error(e: UsersError) -> AppError {
     match e {
         UsersError::NotFound(_) => AppError::NotFound,
         UsersError::ConcurrentWrite => {

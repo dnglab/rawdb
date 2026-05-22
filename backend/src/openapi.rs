@@ -6,7 +6,7 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-use crate::routes::{self, admin, auth, public, upload};
+use crate::routes::{self, admin, auth, export, me, public, upload};
 
 /// Registers the cookie-based session scheme so endpoints can declare
 /// `security(("session_cookie" = []))`. The session is the JWT issued by
@@ -22,6 +22,13 @@ impl Modify for SecurityAddon {
         components.add_security_scheme(
             "session_cookie",
             SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new("rawdb_session"))),
+        );
+        // Personal API key for `unlimited`-role users — sent in the
+        // `X-API-Key` header; bypasses the download rate limit and gates
+        // `/api/export`.
+        components.add_security_scheme(
+            "api_key",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("X-API-Key"))),
         );
     }
 }
@@ -44,6 +51,7 @@ impl Modify for SecurityAddon {
         public::models,
         public::stats,
         public::download,
+        export::export,
         // Upload flow
         upload::begin,
         upload::stream,
@@ -60,6 +68,9 @@ impl Modify for SecurityAddon {
         auth::oidc_callback_stub,
         auth::github_start,
         auth::github_callback,
+        me::get_api_key,
+        me::create_api_key,
+        me::delete_api_key,
         // Admin — pending review
         admin::list_pending,
         admin::get_pending,
@@ -119,6 +130,12 @@ impl Modify for SecurityAddon {
         admin::UserView,
         admin::AddUserRequest,
         admin::PatchUserRequest,
+        // Self-service API keys + bulk export
+        me::ApiKeyStatus,
+        me::ApiKeyCreated,
+        export::ExportResponse,
+        export::ExportSetEnvelope,
+        export::ExportFileEnvelope,
     )),
     tags(
         (name = "public", description = "Unauthenticated browse, search and download."),

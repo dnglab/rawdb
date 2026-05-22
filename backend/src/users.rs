@@ -28,6 +28,11 @@ pub struct User {
     pub added_by: Option<String>,
     #[serde(default)]
     pub roles: Vec<String>,
+    /// SHA-256 (hex) of the user's personal API key, if one has been
+    /// generated. Only `unlimited`-role users may hold one. The plaintext
+    /// key is shown to the user exactly once at generation time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -129,6 +134,7 @@ pub fn to_db_row(u: User) -> UserRow {
         added_at: u.added_at,
         added_by: u.added_by,
         roles: u.roles,
+        api_key_hash: u.api_key_hash,
     }
 }
 
@@ -141,6 +147,7 @@ impl PartialEq for User {
             && self.added_at == other.added_at
             && self.added_by == other.added_by
             && self.roles == other.roles
+            && self.api_key_hash == other.api_key_hash
     }
 }
 impl Eq for User {}

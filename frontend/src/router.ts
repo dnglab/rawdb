@@ -10,6 +10,7 @@ const routes: RouteRecordRaw[] = [
   },
   { path: '/upload', component: () => import('./views/Upload.vue') },
   { path: '/login', component: () => import('./views/Login.vue') },
+  { path: '/account', component: () => import('./views/Account.vue') },
   { path: '/admin', component: () => import('./views/admin/Pending.vue') },
   {
     path: '/admin/pending/:upload_id',

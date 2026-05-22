@@ -6,6 +6,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
+mod apikey;
 mod auth;
 mod auth_github;
 mod auth_oidc;

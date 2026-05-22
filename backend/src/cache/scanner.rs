@@ -426,6 +426,8 @@ struct UserEntry {
     added_by: Option<String>,
     #[serde(default)]
     roles: Vec<String>,
+    #[serde(default)]
+    api_key_hash: Option<String>,
 }
 
 fn parse_users_toml(bytes: &[u8]) -> Result<Vec<UserRow>> {
@@ -441,6 +443,7 @@ fn parse_users_toml(bytes: &[u8]) -> Result<Vec<UserRow>> {
             added_at: e.added_at,
             added_by: e.added_by,
             roles: e.roles,
+            api_key_hash: e.api_key_hash,
         })
         .collect())
 }

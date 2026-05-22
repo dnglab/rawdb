@@ -43,7 +43,14 @@ const initial = computed(() => {
     <template #end>
       <div class="bar-end" v-if="ready">
         <template v-if="isLoggedIn">
-          <Avatar :label="initial" shape="circle" size="normal" class="me" />
+          <Avatar
+            :label="initial"
+            shape="circle"
+            size="normal"
+            class="me"
+            title="Account"
+            @click="router.push('/account')"
+          />
           <Button
             label="Sign out"
             icon="pi pi-sign-out"
@@ -117,5 +124,6 @@ const initial = computed(() => {
   background: var(--p-primary-100);
   color: var(--p-primary-700);
   font-weight: 600;
+  cursor: pointer;
 }
 </style>

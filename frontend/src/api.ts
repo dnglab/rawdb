@@ -288,6 +288,20 @@ export const api = {
     s3_upload_id: string;
   }) => postJSONNoBody('/api/upload/multipart/abort', body),
 
+  apiKeyStatus: () =>
+    fetchJSON<{ has_key: boolean; eligible: boolean }>('/api/me/api-key'),
+  apiKeyCreate: () =>
+    postJSON<{ api_key: string }>('/api/me/api-key', {}),
+  apiKeyDelete: async (): Promise<void> => {
+    const res = await fetch('/api/me/api-key', {
+      method: 'DELETE',
+      credentials: 'same-origin',
+    });
+    if (!res.ok && res.status !== 204) {
+      throw await errorFromResponse('/api/me/api-key', res);
+    }
+  },
+
   adminPending: () => fetchJSON<PendingRow[]>('/api/admin/pending'),
   adminPendingDetail: (uploadId: string) =>
     fetchJSON<PendingDetail>(`/api/admin/pending/${enc(uploadId)}`),

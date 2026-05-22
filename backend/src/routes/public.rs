@@ -474,8 +474,10 @@ pub async fn download(
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> AppResult<Response> {
     // Second-tier, per-instance rate limit on sample downloads. Checked
-    // before any DB/S3 work so abuse is rejected cheaply.
-    if state.downloads.enabled() {
+    // before any DB/S3 work so abuse is rejected cheaply. A valid personal
+    // API key (`X-API-Key`) from an `unlimited`-role user bypasses it.
+    let has_api_key = crate::apikey::lookup(&state.db, &headers).is_some();
+    if state.downloads.enabled() && !has_api_key {
         let ip = client_ip(&headers, peer);
         if let crate::ratelimit::Decision::Limited { retry_after } =
             state.downloads.check(ip, &file_path)

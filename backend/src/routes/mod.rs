@@ -22,6 +22,8 @@ use crate::state::AppState;
 pub mod admin;
 pub mod auth;
 pub mod errors;
+pub mod export;
+pub mod me;
 pub mod metrics;
 pub mod public;
 pub mod upload;
@@ -30,6 +32,8 @@ pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         .merge(public::router())
         .merge(upload::router(state.config.max_upload_bytes))
+        .merge(me::router())
+        .merge(export::router())
         .nest("/admin", admin::router());
 
     // Interactive OpenAPI docs. Gated by `RAWDB_DOCS_ENABLED` so locked-down

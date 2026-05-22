@@ -330,6 +330,7 @@ pub async fn oidc_callback_stub(
                 added_at: Some(chrono::Utc::now()),
                 added_by: Some("oidc:initial".into()),
                 roles: vec!["admin".into()],
+                api_key_hash: None,
             });
             Ok(())
         })
@@ -494,6 +495,7 @@ pub async fn github_callback(
                 added_at: Some(chrono::Utc::now()),
                 added_by: Some("github:initial".into()),
                 roles: vec!["admin".into()],
+                api_key_hash: None,
             });
             Ok(())
         })
