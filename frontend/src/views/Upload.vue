@@ -295,6 +295,38 @@ function putFile(
   });
 }
 
+// A single file may fail mid-upload (flaky presigned PUT, transient
+// network blip). Retry that one file up to MAX_FILE_ATTEMPTS times before
+// giving up and aborting the whole set. S3 presigned PUTs are whole-object
+// writes — there's no byte-range resume — so each attempt re-sends the
+// full file from the start; the progress bar is reset accordingly.
+const MAX_FILE_ATTEMPTS = 3;
+
+async function putWithRetry(
+  attemptUpload: () => Promise<void>,
+  resetProgress: () => void,
+  label: string,
+): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_FILE_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      status.value = `Retrying ${label} — attempt ${attempt}/${MAX_FILE_ATTEMPTS}…`;
+      resetProgress();
+      // Linear backoff between attempts: 1s, 2s.
+      await new Promise((r) => setTimeout(r, 1000 * (attempt - 1)));
+    }
+    try {
+      await attemptUpload();
+      return;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw new Error(
+    `${label} failed after ${MAX_FILE_ATTEMPTS} attempts — ${String(lastErr)}`,
+  );
+}
+
 async function submit() {
   err.value = null;
   const v = validate();
@@ -317,25 +349,32 @@ async function submit() {
     for (let i = 0; i < rows.value.length; i++) {
       const r = rows.value[i];
       const path = relPath(r);
-      status.value = `Uploading ${r.file.name} (${i + 1}/${rows.value.length})…`;
+      const label = `${r.file.name} (${i + 1}/${rows.value.length})`;
+      status.value = `Uploading ${label}…`;
       const onProgress = (loaded: number, total: number) => {
         // Direct mutation — `rows` holds reactive objects.
         r.progress = total > 0 ? Math.round((loaded / total) * 100) : 0;
       };
       const presigned = begin.urls?.[path];
+      let attemptUpload: () => Promise<void>;
       if (presigned) {
-        await putFile(presigned, r.file, false, onProgress);
+        attemptUpload = () => putFile(presigned, r.file, false, onProgress);
       } else if (begin.stream_base) {
         const encoded = path.split('/').map(encodeURIComponent).join('/');
-        await putFile(
-          `${begin.stream_base}/${encoded}`,
-          r.file,
-          true,
-          onProgress,
-        );
+        const streamUrl = `${begin.stream_base}/${encoded}`;
+        attemptUpload = () => putFile(streamUrl, r.file, true, onProgress);
       } else {
         throw new Error(`no upload URL for ${path}`);
       }
+      // One flaky file retries on its own; only an exhausted file aborts
+      // the whole set.
+      await putWithRetry(
+        attemptUpload,
+        () => {
+          r.progress = 0;
+        },
+        label,
+      );
     }
 
     status.value = 'Finalizing…';
