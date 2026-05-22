@@ -79,6 +79,11 @@ config:
     endpoint: ""
     region: us-east-1
     pathStyle: true
+    # Whether the backend honors `If-Match` on PutObject (used for
+    # optimistic-concurrency writes to the users file). Ceph RGW–based
+    # stores such as Hetzner Object Storage reject conditional PUTs —
+    # set this to false there, or user-management edits fail with 409.
+    conditionalWrites: true
 
   oidc:
     enabled: false

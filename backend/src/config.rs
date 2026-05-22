@@ -43,6 +43,15 @@ pub struct Config {
     #[arg(long, env = "RAWDB_S3_PATH_STYLE", default_value_t = true)]
     pub s3_path_style: bool,
 
+    /// Whether the S3 backend honors `If-Match` on `PutObject`. RawDB uses
+    /// it for optimistic-concurrency writes to `_system/users.toml` so
+    /// peer pods can't clobber each other's edits. Ceph RGW–based stores
+    /// (e.g. Hetzner Object Storage) reject conditional PUTs with 412 —
+    /// set this to `false` for those, and user-management writes fall back
+    /// to last-writer-wins (fine for the rare, human-paced edits involved).
+    #[arg(long, env = "RAWDB_S3_CONDITIONAL_WRITES", default_value_t = true)]
+    pub s3_conditional_writes: bool,
+
     // ---- Scanner --------------------------------------------------------------
     #[arg(long, env = "RAWDB_RESCAN_SECS", default_value_t = 300)]
     pub rescan_secs: u64,

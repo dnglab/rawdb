@@ -27,6 +27,9 @@ pub struct S3 {
     client: Client,
     bucket: String,
     presign_ttl: Duration,
+    /// Whether the backend honors `If-Match` on `PutObject`. When false,
+    /// `users.rs` skips conditional headers (last-writer-wins).
+    conditional_writes: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -94,11 +97,17 @@ impl S3 {
             client: Client::from_conf(s3_cfg),
             bucket: cfg.s3_bucket.clone(),
             presign_ttl: Duration::from_secs(cfg.presign_ttl_secs),
+            conditional_writes: cfg.s3_conditional_writes,
         })
     }
 
     pub fn bucket(&self) -> &str {
         &self.bucket
+    }
+
+    /// Whether `If-Match` conditional PUTs are usable on this backend.
+    pub fn conditional_writes(&self) -> bool {
+        self.conditional_writes
     }
 
     // -- listing -------------------------------------------------------------

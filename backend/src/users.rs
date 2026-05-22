@@ -71,7 +71,12 @@ where
             .map_err(|e| anyhow::anyhow!("serialize users.toml: {e}"))?
             .into_bytes();
 
-        let write = if let Some(etag) = current_etag.as_deref() {
+        let write = if !s3.conditional_writes() {
+            // Backend doesn't honor conditional PUTs — plain write,
+            // last-writer-wins. Acceptable for human-paced user edits.
+            s3.put_bytes(USERS_KEY, body.clone(), Some("application/toml"), None, None)
+                .await
+        } else if let Some(etag) = current_etag.as_deref() {
             s3.put_bytes(
                 USERS_KEY,
                 body.clone(),
@@ -107,6 +112,15 @@ where
             Err(S3Error::Other(e)) => return Err(UsersError::Other(e)),
         }
     }
+    // Every conditional PUT was rejected. A genuine write storm is unlikely
+    // for human-paced user edits — the usual cause is an S3 backend that
+    // doesn't honor `If-Match` on PutObject (Ceph RGW / Hetzner). Point the
+    // operator at the escape hatch.
+    tracing::error!(
+        "users.toml conditional write exhausted {MAX_CAS_RETRIES} retries — \
+         if your S3 backend doesn't support If-Match on PutObject \
+         (e.g. Hetzner / Ceph RGW), set RAWDB_S3_CONDITIONAL_WRITES=false"
+    );
     Err(UsersError::ConcurrentWrite)
 }
 
