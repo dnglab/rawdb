@@ -1,13 +1,71 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { useToast } from 'primevue/usetoast';
 import { api, formatBytes, type SetDetail } from '../api';
 import PageHeader from '../components/PageHeader.vue';
 import { useAuth } from '../auth';
 
 const props = defineProps<{ maker: string; model: string }>();
 const router = useRouter();
+const toast = useToast();
 const { canReview } = useAuth();
+
+// Tracks which file paths have an in-flight download preflight, so the
+// row's button can show a brief busy state.
+const downloading = ref<Set<string>>(new Set());
+
+function humanDuration(secs: number): string {
+  if (secs < 60) return `${secs} second${secs === 1 ? '' : 's'}`;
+  const mins = Math.ceil(secs / 60);
+  return `${mins} minute${mins === 1 ? '' : 's'}`;
+}
+
+// Downloads are rate limited server-side (per backend instance, per IP).
+// We preflight with a redirect-manual fetch so a 429 can be surfaced as a
+// toast instead of a full-page error. On success we navigate normally;
+// the backend's same-path dedup grace means this second hit reuses the
+// preflight's token rather than consuming another.
+async function download(path: string) {
+  if (!detail.value) return;
+  const url = api.downloadUrl(detail.value.maker, detail.value.model, path);
+  downloading.value.add(path);
+  const ctrl = new AbortController();
+  try {
+    const res = await fetch(url, { redirect: 'manual', signal: ctrl.signal });
+    if (res.status === 429) {
+      let secs = 0;
+      try {
+        secs = (await res.json())?.retry_after_secs ?? 0;
+      } catch {
+        /* body may be empty */
+      }
+      if (!secs) {
+        const ra = res.headers.get('retry-after');
+        secs = ra ? parseInt(ra, 10) || 0 : 0;
+      }
+      toast.add({
+        severity: 'warn',
+        summary: 'Download limit reached',
+        detail: secs
+          ? `Too many downloads from your address. Try again in about ${humanDuration(secs)}.`
+          : 'Too many downloads from your address. Please wait a little and try again.',
+        life: 7000,
+      });
+      return;
+    }
+  } catch {
+    /* network error during preflight — fall through and let the
+       browser's own navigation surface whatever went wrong */
+  } finally {
+    // Stop the preflight body (relevant in streaming download mode);
+    // harmless for the redirect (presigned) case.
+    ctrl.abort();
+    downloading.value.delete(path);
+  }
+  // Not rate limited — trigger the actual download.
+  window.location.href = url;
+}
 
 const detail = ref<SetDetail | null>(null);
 const err = ref<string | null>(null);
@@ -100,17 +158,15 @@ watch(() => [props.maker, props.model], load);
             <Column field="license" header="License" />
             <Column header="">
               <template #body="{ data }">
-                <a
-                  :href="api.downloadUrl(detail.maker, detail.model, data.path)"
-                >
-                  <Button
-                    label="Download"
-                    icon="pi pi-download"
-                    size="small"
-                    severity="secondary"
-                    outlined
-                  />
-                </a>
+                <Button
+                  label="Download"
+                  icon="pi pi-download"
+                  size="small"
+                  severity="secondary"
+                  outlined
+                  :loading="downloading.has(data.path)"
+                  @click="download(data.path)"
+                />
               </template>
             </Column>
           </DataTable>

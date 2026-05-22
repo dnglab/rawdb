@@ -45,6 +45,12 @@ config:
   # surfaced via /api/stats so the upload form refuses oversized files
   # before the PUT. Default 2 GiB.
   maxUploadBytes: 2147483648
+  # Second-tier download rate limit, enforced per backend instance per
+  # client IP (behind/in addition to any edge rate limiting). A client
+  # may start at most `downloadRateLimit` distinct file downloads per
+  # `downloadRateWindowSecs`. Set downloadRateLimit to 0 to disable.
+  downloadRateLimit: 50
+  downloadRateWindowSecs: 300
   blockedExtensions: "zip,tar,gz,tgz,txt,exe,pdf,rar,7z,bz2,xz"
   # Operator-curated tags. Always present in /api/tags with
   # `suggested: true`, even when no current set uses them; the frontend

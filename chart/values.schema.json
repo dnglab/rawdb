@@ -60,6 +60,8 @@
         "presignTtlSecs": { "type": "integer", "minimum": 1 },
         "pendingTtlDays": { "type": "integer", "minimum": 0 },
         "maxUploadBytes": { "type": "integer", "minimum": 1 },
+        "downloadRateLimit": { "type": "integer", "minimum": 0 },
+        "downloadRateWindowSecs": { "type": "integer", "minimum": 1 },
         "blockedExtensions": {
           "type": "string",
           "description": "Comma-separated denylist of file extensions."

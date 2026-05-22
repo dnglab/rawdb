@@ -17,6 +17,8 @@ data:
   # `quote` on this value renders scientific notation once it exceeds
   # int32; printf "%d" keeps it decimal so the backend can parse u64.
   RAWDB_MAX_UPLOAD_BYTES: {{ printf "%d" (.Values.config.maxUploadBytes | int64) | quote }}
+  RAWDB_DOWNLOAD_RATE_LIMIT: {{ .Values.config.downloadRateLimit | quote }}
+  RAWDB_DOWNLOAD_RATE_WINDOW_SECS: {{ .Values.config.downloadRateWindowSecs | quote }}
   RAWDB_BLOCKED_EXTENSIONS: {{ .Values.config.blockedExtensions | quote }}
   RAWDB_TAGS_SUGGESTED: {{ .Values.config.tagsSuggested | quote }}
   RAWDB_SESSION_TTL_SECS: {{ .Values.config.sessionTtlSecs | quote }}

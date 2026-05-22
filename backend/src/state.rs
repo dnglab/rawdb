@@ -11,6 +11,7 @@ use crate::auth_oidc::OidcClient;
 use crate::cache::db::Db;
 use crate::cache::scanner::Scanner;
 use crate::config::Config;
+use crate::ratelimit::DownloadRateLimiter;
 use crate::s3::S3;
 
 /// Shared state passed to every handler.
@@ -27,6 +28,8 @@ pub struct AppState {
     /// Becomes `true` once the first full S3 scan completes; gates readiness probe.
     pub ready: watch::Receiver<bool>,
     pub metrics: Arc<AppMetrics>,
+    /// Per-instance, per-IP download rate limiter.
+    pub downloads: Arc<DownloadRateLimiter>,
 }
 
 impl AppState {

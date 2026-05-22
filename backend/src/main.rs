@@ -14,6 +14,7 @@ mod config;
 mod error;
 mod meta;
 mod openapi;
+mod ratelimit;
 mod routes;
 mod s3;
 mod state;
@@ -52,6 +53,22 @@ async fn main() -> Result<()> {
     let (ready_tx, ready_rx) = watch::channel(false);
     scanner.clone().spawn(ready_tx);
 
+    let downloads = Arc::new(ratelimit::DownloadRateLimiter::new(
+        config.download_rate_limit,
+        std::time::Duration::from_secs(config.download_rate_window_secs),
+    ));
+    // Periodically evict aged-out IPs so the limiter map stays bounded.
+    if downloads.enabled() {
+        let dl = downloads.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                dl.sweep();
+            }
+        });
+    }
+
     let state = AppState {
         config: Arc::new(config),
         db,
@@ -61,6 +78,7 @@ async fn main() -> Result<()> {
         github: github.map(Arc::new),
         ready: ready_rx,
         metrics,
+        downloads,
     };
 
     let app = routes::build_router(state.clone());
@@ -81,7 +99,14 @@ async fn main() -> Result<()> {
     let api_shutdown = wait_for_shutdown(shutdown_rx.clone());
     let metrics_shutdown = wait_for_shutdown(shutdown_rx);
 
-    let api_fut = axum::serve(listener, app).with_graceful_shutdown(api_shutdown);
+    // `into_make_service_with_connect_info` exposes the TCP peer address to
+    // handlers via `ConnectInfo<SocketAddr>` — the fallback client IP for
+    // the download rate limiter when no `X-Forwarded-For` is present.
+    let api_fut = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(api_shutdown);
     let metrics_fut =
         axum::serve(metrics_listener, metrics_app).with_graceful_shutdown(metrics_shutdown);
     tokio::try_join!(api_fut.into_future(), metrics_fut.into_future())?;

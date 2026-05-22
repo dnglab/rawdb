@@ -463,13 +463,29 @@ pub(crate) struct DownloadQuery {
         (status = 302, description = "Redirect to a presigned download URL"),
         (status = 200, description = "Streamed file bytes (when streaming mode is selected)", content_type = "application/octet-stream"),
         (status = 404, description = "File not found"),
+        (status = 429, description = "Per-IP download rate limit exceeded; see Retry-After"),
     ),
 )]
 pub async fn download(
     State(state): State<AppState>,
     Path((maker, model, file_path)): Path<(String, String, String)>,
     Query(q): Query<DownloadQuery>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> AppResult<Response> {
+    // Second-tier, per-instance rate limit on sample downloads. Checked
+    // before any DB/S3 work so abuse is rejected cheaply.
+    if state.downloads.enabled() {
+        let ip = client_ip(&headers, peer);
+        if let crate::ratelimit::Decision::Limited { retry_after } =
+            state.downloads.check(ip, &file_path)
+        {
+            return Err(AppError::TooManyRequests {
+                retry_after_secs: retry_after.as_secs(),
+            });
+        }
+    }
+
     // Verify the file exists in the approved cache before producing a
     // presigned URL or opening a stream — keeps misses cheap.
     let conn = state
@@ -566,6 +582,30 @@ pub(crate) async fn serve_download(
         h.insert(CONTENT_DISPOSITION, v);
     }
     Ok(resp)
+}
+
+/// Best-effort client IP for rate limiting. Behind a proxy (Traefik), the
+/// TCP peer is the proxy, so the real client is taken from
+/// `X-Forwarded-For` (leftmost entry) or `X-Real-IP`. Falls back to the
+/// TCP peer for direct-access deployments. XFF is spoofable, but for a
+/// per-instance soft limit that's an acceptable trade-off.
+fn client_ip(
+    headers: &axum::http::HeaderMap,
+    peer: std::net::SocketAddr,
+) -> std::net::IpAddr {
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = xff.split(',').next() {
+            if let Ok(ip) = first.trim().parse() {
+                return ip;
+            }
+        }
+    }
+    if let Some(xri) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        if let Ok(ip) = xri.trim().parse() {
+            return ip;
+        }
+    }
+    peer.ip()
 }
 
 fn percent_encode_filename(name: &str) -> String {
