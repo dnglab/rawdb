@@ -80,12 +80,30 @@ export interface Me {
 
 export interface BeginFile {
   path: string;
+  size: number;
 }
+
+export interface PartPlan {
+  part_number: number;
+  url: string;
+}
+
+/// Per-file upload plan returned by /api/upload/begin. `kind` discriminates:
+/// a single presigned PUT, or an S3 multipart upload.
+export type FilePlan =
+  | { kind: 'single'; url: string }
+  | {
+      kind: 'multipart';
+      s3_upload_id: string;
+      part_size: number;
+      parts: PartPlan[];
+    };
 
 export interface BeginResponse {
   upload_id: string;
   mode: string;
-  urls?: Record<string, string>;
+  /// Per-declared-file plan, keyed by relative path. Empty in stream mode.
+  files: Record<string, FilePlan>;
   stream_base?: string;
 }
 
@@ -258,6 +276,17 @@ export const api = {
     upload_id: string;
     meta_toml: string;
   }) => postJSONNoBody('/api/upload/complete', body),
+  uploadMultipartComplete: (body: {
+    upload_id: string;
+    path: string;
+    s3_upload_id: string;
+    parts: { part_number: number; etag: string }[];
+  }) => postJSONNoBody('/api/upload/multipart/complete', body),
+  uploadMultipartAbort: (body: {
+    upload_id: string;
+    path: string;
+    s3_upload_id: string;
+  }) => postJSONNoBody('/api/upload/multipart/abort', body),
 
   adminPending: () => fetchJSON<PendingRow[]>('/api/admin/pending'),
   adminPendingDetail: (uploadId: string) =>

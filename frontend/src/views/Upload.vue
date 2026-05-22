@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { api } from '../api';
+import { api, type FilePlan } from '../api';
 import PageHeader from '../components/PageHeader.vue';
 import TagInput from '../components/TagInput.vue';
 
@@ -302,22 +302,21 @@ function putFile(
 // full file from the start; the progress bar is reset accordingly.
 const MAX_FILE_ATTEMPTS = 3;
 
-async function putWithRetry(
-  attemptUpload: () => Promise<void>,
+async function putWithRetry<T>(
+  attempt: () => Promise<T>,
   resetProgress: () => void,
   label: string,
-): Promise<void> {
+): Promise<T> {
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= MAX_FILE_ATTEMPTS; attempt++) {
-    if (attempt > 1) {
-      status.value = `Retrying ${label} — attempt ${attempt}/${MAX_FILE_ATTEMPTS}…`;
+  for (let n = 1; n <= MAX_FILE_ATTEMPTS; n++) {
+    if (n > 1) {
+      status.value = `Retrying ${label} — attempt ${n}/${MAX_FILE_ATTEMPTS}…`;
       resetProgress();
       // Linear backoff between attempts: 1s, 2s.
-      await new Promise((r) => setTimeout(r, 1000 * (attempt - 1)));
+      await new Promise((r) => setTimeout(r, 1000 * (n - 1)));
     }
     try {
-      await attemptUpload();
-      return;
+      return await attempt();
     } catch (e) {
       lastErr = e;
     }
@@ -325,6 +324,108 @@ async function putWithRetry(
   throw new Error(
     `${label} failed after ${MAX_FILE_ATTEMPTS} attempts — ${String(lastErr)}`,
   );
+}
+
+// PUT one multipart chunk; resolves with the part's ETag, which is needed
+// to finalize the multipart upload. The browser can only read the ETag
+// header if the S3 bucket CORS config exposes it (ExposeHeaders: ETag).
+function putPart(
+  url: string,
+  blob: Blob,
+  onProgress: (loaded: number) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url, true);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const etag = xhr.getResponseHeader('ETag');
+        if (etag) {
+          onProgress(blob.size);
+          resolve(etag);
+        } else {
+          reject(
+            new Error(
+              'part uploaded but no ETag was readable — the S3 bucket CORS ' +
+                'config must expose the ETag header (ExposeHeaders: ["ETag"])',
+            ),
+          );
+        }
+      } else {
+        reject(new Error(`part PUT failed (HTTP ${xhr.status})`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('part PUT failed (network error)'));
+    xhr.onabort = () => reject(new Error('part PUT aborted'));
+    xhr.send(blob);
+  });
+}
+
+// Upload one file via S3 multipart: slice it on the part boundary, PUT
+// each part to its presigned URL (each part retried independently), then
+// ask the backend to assemble the object. On unrecoverable failure the
+// multipart upload is aborted so it doesn't linger in the bucket.
+async function uploadMultipartFile(
+  r: FileRow,
+  plan: Extract<FilePlan, { kind: 'multipart' }>,
+  rawdbUploadId: string,
+  path: string,
+  label: string,
+): Promise<void> {
+  const loaded = new Array<number>(plan.parts.length).fill(0);
+  const refresh = () => {
+    const done = loaded.reduce((a, b) => a + b, 0);
+    r.progress =
+      r.file.size > 0
+        ? Math.min(100, Math.round((done / r.file.size) * 100))
+        : 0;
+  };
+  const etags: { part_number: number; etag: string }[] = [];
+  try {
+    for (let pi = 0; pi < plan.parts.length; pi++) {
+      const part = plan.parts[pi];
+      const start = pi * plan.part_size;
+      const end = Math.min(start + plan.part_size, r.file.size);
+      const blob = r.file.slice(start, end);
+      const partLabel = `${label} part ${pi + 1}/${plan.parts.length}`;
+      status.value = `Uploading ${partLabel}…`;
+      const etag = await putWithRetry(
+        () =>
+          putPart(part.url, blob, (n) => {
+            loaded[pi] = n;
+            refresh();
+          }),
+        () => {
+          loaded[pi] = 0;
+          refresh();
+        },
+        partLabel,
+      );
+      etags.push({ part_number: part.part_number, etag });
+    }
+  } catch (e) {
+    // Best-effort cleanup of the incomplete multipart upload.
+    try {
+      await api.uploadMultipartAbort({
+        upload_id: rawdbUploadId,
+        path,
+        s3_upload_id: plan.s3_upload_id,
+      });
+    } catch {
+      /* ignore — a bucket lifecycle rule should also reap stale uploads */
+    }
+    throw e;
+  }
+  await api.uploadMultipartComplete({
+    upload_id: rawdbUploadId,
+    path,
+    s3_upload_id: plan.s3_upload_id,
+    parts: etags,
+  });
+  r.progress = 100;
 }
 
 async function submit() {
@@ -343,7 +444,10 @@ async function submit() {
     const begin = await api.uploadBegin({
       maker,
       model,
-      files: rows.value.map((r) => ({ path: relPath(r) })),
+      files: rows.value.map((r) => ({
+        path: relPath(r),
+        size: r.file.size,
+      })),
     });
 
     for (let i = 0; i < rows.value.length; i++) {
@@ -355,26 +459,31 @@ async function submit() {
         // Direct mutation — `rows` holds reactive objects.
         r.progress = total > 0 ? Math.round((loaded / total) * 100) : 0;
       };
-      const presigned = begin.urls?.[path];
-      let attemptUpload: () => Promise<void>;
-      if (presigned) {
-        attemptUpload = () => putFile(presigned, r.file, false, onProgress);
+      const resetProgress = () => {
+        r.progress = 0;
+      };
+      const plan = begin.files?.[path];
+      // Large files use S3 multipart (per-part presigned PUTs); small
+      // files a single presigned PUT; pure-stream mode has no plan.
+      if (plan?.kind === 'multipart') {
+        await uploadMultipartFile(r, plan, begin.upload_id, path, label);
+      } else if (plan?.kind === 'single') {
+        await putWithRetry(
+          () => putFile(plan.url, r.file, false, onProgress),
+          resetProgress,
+          label,
+        );
       } else if (begin.stream_base) {
         const encoded = path.split('/').map(encodeURIComponent).join('/');
         const streamUrl = `${begin.stream_base}/${encoded}`;
-        attemptUpload = () => putFile(streamUrl, r.file, true, onProgress);
+        await putWithRetry(
+          () => putFile(streamUrl, r.file, true, onProgress),
+          resetProgress,
+          label,
+        );
       } else {
-        throw new Error(`no upload URL for ${path}`);
+        throw new Error(`no upload plan for ${path}`);
       }
-      // One flaky file retries on its own; only an exhausted file aborts
-      // the whole set.
-      await putWithRetry(
-        attemptUpload,
-        () => {
-          r.progress = 0;
-        },
-        label,
-      );
     }
 
     status.value = 'Finalizing…';

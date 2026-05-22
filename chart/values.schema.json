@@ -60,6 +60,7 @@
         "presignTtlSecs": { "type": "integer", "minimum": 1 },
         "pendingTtlDays": { "type": "integer", "minimum": 0 },
         "maxUploadBytes": { "type": "integer", "minimum": 1 },
+        "multipartPartSize": { "type": "integer", "minimum": 5242880 },
         "downloadRateLimit": { "type": "integer", "minimum": 0 },
         "downloadRateWindowSecs": { "type": "integer", "minimum": 1 },
         "blockedExtensions": {

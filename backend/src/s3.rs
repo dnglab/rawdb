@@ -14,7 +14,9 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::config::{Region, SharedCredentialsProvider};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::presigning::PresigningConfig;
-use aws_sdk_s3::types::{Delete, ObjectIdentifier};
+use aws_sdk_s3::types::{
+    CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier,
+};
 use aws_sdk_s3::Client;
 use chrono::{DateTime, Utc};
 
@@ -355,6 +357,96 @@ impl S3 {
             .presigned(presigning)
             .await?;
         Ok(req.uri().to_string())
+    }
+
+    // -- multipart upload ----------------------------------------------------
+    //
+    // Some S3 backends (notably Hetzner) fail large single PUTs; the
+    // presigned upload path uses multipart for big files. The client PUTs
+    // each part to a presigned URL, captures the per-part ETag, then calls
+    // `complete_multipart_upload` with the (part_number, etag) list.
+
+    /// Initiate a multipart upload; returns the S3 `UploadId`.
+    pub async fn create_multipart_upload(&self, key: &str) -> Result<String> {
+        let out = self
+            .client
+            .create_multipart_upload()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .with_context(|| format!("CreateMultipartUpload {key}"))?;
+        out.upload_id()
+            .map(String::from)
+            .ok_or_else(|| anyhow::anyhow!("CreateMultipartUpload {key}: no upload id"))
+    }
+
+    /// Presigned URL for a single `UploadPart` (1-based `part_number`).
+    pub async fn presign_upload_part(
+        &self,
+        key: &str,
+        upload_id: &str,
+        part_number: i32,
+    ) -> Result<String> {
+        let presigning = PresigningConfig::expires_in(self.presign_ttl)?;
+        let req = self
+            .client
+            .upload_part()
+            .bucket(&self.bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .part_number(part_number)
+            .presigned(presigning)
+            .await?;
+        Ok(req.uri().to_string())
+    }
+
+    /// Finalize a multipart upload. `parts` is `(part_number, etag)` in any
+    /// order; they're sorted by part number as S3 requires.
+    pub async fn complete_multipart_upload(
+        &self,
+        key: &str,
+        upload_id: &str,
+        mut parts: Vec<(i32, String)>,
+    ) -> Result<()> {
+        parts.sort_by_key(|(n, _)| *n);
+        let completed: Vec<CompletedPart> = parts
+            .into_iter()
+            .map(|(n, etag)| {
+                CompletedPart::builder()
+                    .part_number(n)
+                    .e_tag(etag)
+                    .build()
+            })
+            .collect();
+        let mpu = CompletedMultipartUpload::builder()
+            .set_parts(Some(completed))
+            .build();
+        self.client
+            .complete_multipart_upload()
+            .bucket(&self.bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .multipart_upload(mpu)
+            .send()
+            .await
+            .with_context(|| format!("CompleteMultipartUpload {key}"))?;
+        Ok(())
+    }
+
+    /// Abort a multipart upload, discarding any uploaded parts. Called on
+    /// the failure path so incomplete uploads don't linger and accrue
+    /// storage cost.
+    pub async fn abort_multipart_upload(&self, key: &str, upload_id: &str) -> Result<()> {
+        self.client
+            .abort_multipart_upload()
+            .bucket(&self.bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .send()
+            .await
+            .with_context(|| format!("AbortMultipartUpload {key}"))?;
+        Ok(())
     }
 }
 

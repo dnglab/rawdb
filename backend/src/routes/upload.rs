@@ -47,6 +47,8 @@ pub fn router(max_upload_bytes: u64) -> Router<AppState> {
             "/upload/stream/:upload_id/*path",
             put(stream).layer(DefaultBodyLimit::max(body_limit)),
         )
+        .route("/upload/multipart/complete", post(multipart_complete))
+        .route("/upload/multipart/abort", post(multipart_abort))
         .route("/upload/complete", post(complete))
 }
 
@@ -64,6 +66,36 @@ pub struct BeginFile {
     /// Path relative to the model directory, e.g. `raw_modes/IMG_0001.cr3`.
     /// Must contain at least one `/` (the category folder).
     pub path: String,
+    /// File size in bytes. Decides single PUT vs. multipart on the
+    /// presigned path.
+    pub size: u64,
+}
+
+/// One presigned part of a multipart upload.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PartPlan {
+    /// 1-based part number.
+    pub part_number: i32,
+    /// Presigned `UploadPart` URL the client PUTs this part's bytes to.
+    pub url: String,
+}
+
+/// How the client should upload one declared file on the presigned path.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FilePlan {
+    /// A single presigned PUT of the whole object.
+    Single { url: String },
+    /// S3 multipart upload: PUT each part to its presigned URL, capture
+    /// the per-part `ETag`, then POST `/api/upload/multipart/complete`.
+    Multipart {
+        /// S3-side upload id, echoed back on complete/abort.
+        s3_upload_id: String,
+        /// Bytes per part; the client slices the file on this boundary.
+        /// The final part may be smaller.
+        part_size: u64,
+        parts: Vec<PartPlan>,
+    },
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -73,13 +105,37 @@ pub struct BeginResponse {
     pub upload_id: String,
     /// `presigned`, `stream`, or `either` — mirrors `RAWDB_UPLOAD_MODE`.
     pub mode: String,
-    /// Per-file presigned PUT URLs, present when mode is `presigned` or `either`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub urls: Option<std::collections::BTreeMap<String, String>>,
+    /// Per-declared-file upload plan, keyed by relative path. Empty in
+    /// pure `stream` mode.
+    pub files: std::collections::BTreeMap<String, FilePlan>,
     /// Stream endpoint base (PUT relative paths under it), present when
     /// mode is `stream` or `either`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_base: Option<String>,
+}
+
+/// One finished part, reported by the client on multipart completion.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MultipartPartInput {
+    pub part_number: i32,
+    /// `ETag` the client read from that part's PUT response. The bucket
+    /// CORS config must expose the `ETag` header for the browser to see it.
+    pub etag: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MultipartCompleteRequest {
+    pub upload_id: String,
+    pub path: String,
+    pub s3_upload_id: String,
+    pub parts: Vec<MultipartPartInput>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct MultipartAbortRequest {
+    pub upload_id: String,
+    pub path: String,
+    pub s3_upload_id: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -94,9 +150,13 @@ pub struct CompleteRequest {
 
 // ---- handlers ------------------------------------------------------------
 
+/// S3 caps a multipart upload at 10 000 parts.
+const MAX_PARTS: u64 = 10_000;
+
 /// Start an upload. Server mints an `upload_id` and (per `RAWDB_UPLOAD_MODE`)
-/// either presigned PUT URLs for each declared file, a streaming base URL,
-/// or both.
+/// returns a per-file plan — a single presigned PUT for small files, an S3
+/// multipart plan for files larger than `RAWDB_MULTIPART_PART_SIZE` — plus
+/// a streaming base URL when streaming is permitted.
 #[utoipa::path(
     post,
     path = "/api/upload/begin",
@@ -105,6 +165,7 @@ pub struct CompleteRequest {
     responses(
         (status = 200, body = BeginResponse),
         (status = 400, description = "Validation error (empty maker/model, no files, blocked extension, invalid path)"),
+        (status = 413, description = "A declared file exceeds RAWDB_MAX_UPLOAD_BYTES"),
     ),
 )]
 pub async fn begin(
@@ -123,6 +184,7 @@ pub async fn begin(
         .iter()
         .map(String::as_str)
         .collect();
+    let max = state.config.max_upload_bytes;
     for f in &req.files {
         validate_rel_path(&f.path)?;
         if let Some(ext) = blocked_extension(&f.path, &blocked) {
@@ -131,31 +193,68 @@ pub async fn begin(
                 f.path
             )));
         }
+        if f.size > max {
+            return Err(AppError::PayloadTooLarge(format!(
+                "{} is {} bytes; maximum is {} bytes",
+                f.path, f.size, max
+            )));
+        }
     }
 
     let upload_id = mint_upload_id();
     let mode = state.config.upload_mode;
+    let part_size = state.config.multipart_part_size;
 
-    let (urls, mode_str) = match mode {
-        UploadMode::Presigned | UploadMode::Either => {
-            let mut map = std::collections::BTreeMap::new();
-            for f in &req.files {
-                let key = pending_key(&upload_id, &f.path);
+    let mut files = std::collections::BTreeMap::new();
+    if matches!(mode, UploadMode::Presigned | UploadMode::Either) {
+        for f in &req.files {
+            let key = pending_key(&upload_id, &f.path);
+            // Small files: one presigned PUT. Larger: multipart, so backends
+            // that choke on big single PUTs (Hetzner) stay happy.
+            if f.size <= part_size {
                 let url = state.s3.presign_put(&key).await.map_err(AppError::Other)?;
-                map.insert(f.path.clone(), url);
+                files.insert(f.path.clone(), FilePlan::Single { url });
+            } else {
+                // Keep the part count under the S3 ceiling: if the file is
+                // big enough that `part_size` would need >10k parts, grow
+                // the part size to fit.
+                let eff_part = part_size.max(f.size.div_ceil(MAX_PARTS));
+                let part_count = f.size.div_ceil(eff_part);
+                let s3_upload_id = state
+                    .s3
+                    .create_multipart_upload(&key)
+                    .await
+                    .map_err(AppError::Other)?;
+                let mut parts = Vec::with_capacity(part_count as usize);
+                for n in 1..=part_count as i32 {
+                    let url = state
+                        .s3
+                        .presign_upload_part(&key, &s3_upload_id, n)
+                        .await
+                        .map_err(AppError::Other)?;
+                    parts.push(PartPlan {
+                        part_number: n,
+                        url,
+                    });
+                }
+                files.insert(
+                    f.path.clone(),
+                    FilePlan::Multipart {
+                        s3_upload_id,
+                        part_size: eff_part,
+                        parts,
+                    },
+                );
             }
-            (
-                Some(map),
-                if matches!(mode, UploadMode::Presigned) {
-                    "presigned"
-                } else {
-                    "either"
-                },
-            )
         }
-        UploadMode::Stream => (None, "stream"),
-    };
-    let mode_str = mode_str.to_string();
+    }
+
+    let mode_str = match mode {
+        UploadMode::Presigned => "presigned",
+        UploadMode::Stream => "stream",
+        UploadMode::Either => "either",
+    }
+    .to_string();
 
     let stream_base = matches!(mode, UploadMode::Stream | UploadMode::Either)
         .then(|| format!("/api/upload/stream/{upload_id}"));
@@ -170,9 +269,73 @@ pub async fn begin(
     Ok(Json(BeginResponse {
         upload_id,
         mode: mode_str,
-        urls,
+        files,
         stream_base,
     }))
+}
+
+/// Finalize one file's multipart upload: the server calls
+/// `CompleteMultipartUpload` with the parts the client uploaded. Called
+/// once per multipart file, before the set-level `/api/upload/complete`.
+#[utoipa::path(
+    post,
+    path = "/api/upload/multipart/complete",
+    tag = "upload",
+    request_body = MultipartCompleteRequest,
+    responses(
+        (status = 200, description = "Multipart object assembled"),
+        (status = 400, description = "Invalid upload id / path"),
+    ),
+)]
+pub async fn multipart_complete(
+    State(state): State<AppState>,
+    Json(req): Json<MultipartCompleteRequest>,
+) -> AppResult<StatusCode> {
+    validate_upload_id(&req.upload_id)?;
+    validate_rel_path(&req.path)?;
+    if req.parts.is_empty() {
+        return Err(AppError::BadRequest("no parts supplied".into()));
+    }
+    let key = pending_key(&req.upload_id, &req.path);
+    let parts: Vec<(i32, String)> = req
+        .parts
+        .into_iter()
+        .map(|p| (p.part_number, p.etag))
+        .collect();
+    state
+        .s3
+        .complete_multipart_upload(&key, &req.s3_upload_id, parts)
+        .await
+        .map_err(AppError::Other)?;
+    Ok(StatusCode::OK)
+}
+
+/// Abort one file's multipart upload, discarding any uploaded parts. The
+/// client calls this on its failure path so incomplete uploads don't
+/// linger in the bucket.
+#[utoipa::path(
+    post,
+    path = "/api/upload/multipart/abort",
+    tag = "upload",
+    request_body = MultipartAbortRequest,
+    responses(
+        (status = 200, description = "Multipart upload aborted"),
+        (status = 400, description = "Invalid upload id / path"),
+    ),
+)]
+pub async fn multipart_abort(
+    State(state): State<AppState>,
+    Json(req): Json<MultipartAbortRequest>,
+) -> AppResult<StatusCode> {
+    validate_upload_id(&req.upload_id)?;
+    validate_rel_path(&req.path)?;
+    let key = pending_key(&req.upload_id, &req.path);
+    state
+        .s3
+        .abort_multipart_upload(&key, &req.s3_upload_id)
+        .await
+        .map_err(AppError::Other)?;
+    Ok(StatusCode::OK)
 }
 
 /// Streaming upload fallback. Client PUTs the raw file bytes; the server

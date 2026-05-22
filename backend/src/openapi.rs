@@ -47,6 +47,8 @@ impl Modify for SecurityAddon {
         // Upload flow
         upload::begin,
         upload::stream,
+        upload::multipart_complete,
+        upload::multipart_abort,
         upload::complete,
         // Auth
         auth::login,
@@ -93,6 +95,11 @@ impl Modify for SecurityAddon {
         upload::BeginRequest,
         upload::BeginFile,
         upload::BeginResponse,
+        upload::FilePlan,
+        upload::PartPlan,
+        upload::MultipartCompleteRequest,
+        upload::MultipartPartInput,
+        upload::MultipartAbortRequest,
         upload::CompleteRequest,
         // Auth
         auth::LoginRequest,

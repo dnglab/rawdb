@@ -45,6 +45,11 @@ config:
   # surfaced via /api/stats so the upload form refuses oversized files
   # before the PUT. Default 2 GiB.
   maxUploadBytes: 2147483648
+  # Presigned-upload part size in bytes. Files larger than this are
+  # uploaded with S3 multipart (each part presigned + PUT separately)
+  # instead of one big PUT — some S3 backends (e.g. Hetzner) fail large
+  # single PUTs. Minimum 5 MiB (S3 floor). Default 16 MiB.
+  multipartPartSize: 16777216
   # Second-tier download rate limit, enforced per backend instance per
   # client IP (behind/in addition to any edge rate limiting). A client
   # may start at most `downloadRateLimit` distinct file downloads per

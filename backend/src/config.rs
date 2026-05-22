@@ -80,6 +80,15 @@ pub struct Config {
     #[arg(long, env = "RAWDB_DOWNLOAD_RATE_WINDOW_SECS", default_value_t = 300)]
     pub download_rate_window_secs: u64,
 
+    /// Multipart-upload part size, in bytes, for the presigned upload
+    /// path. Files larger than this are uploaded with S3 multipart (each
+    /// part presigned separately) rather than a single PUT — some S3
+    /// backends (e.g. Hetzner) fail large single PUTs. Also the dividing
+    /// line: a file at or below this size still uses one presigned PUT.
+    /// Minimum 5 MiB (the S3 part-size floor). Default 16 MiB.
+    #[arg(long, env = "RAWDB_MULTIPART_PART_SIZE", default_value_t = 16 * 1024 * 1024)]
+    pub multipart_part_size: u64,
+
     /// Hard ceiling on a single uploaded file, in bytes. Enforced
     /// server-side on the streaming upload path (rejected with 413) and
     /// when finalizing the upload (every declared file's stored size is
@@ -223,6 +232,10 @@ impl Config {
         }
         if self.session_key.len() < 32 {
             bail!("RAWDB_SESSION_KEY must be at least 32 bytes (hex-encoded)");
+        }
+        // S3 requires every multipart part except the last to be ≥ 5 MiB.
+        if self.multipart_part_size < 5 * 1024 * 1024 {
+            bail!("RAWDB_MULTIPART_PART_SIZE must be at least 5 MiB (S3 part-size floor)");
         }
         // OIDC must be all-or-nothing.
         let oidc_fields = [
