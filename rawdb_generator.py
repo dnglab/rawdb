@@ -27,7 +27,7 @@ from pathlib import Path
 
 META_FILE = "rawdb-meta.toml"
 LICENSE_FILE = "LICENSE"
-NOTE_FILE = "NOTE"
+NOTE_FILE = "NOTES"
 DEFAULT_LICENSE = "CC0-1.0"
 CHUNK = 8 * 1024 * 1024  # 8 MiB — same sweet spot the browser uploader uses
 
@@ -91,7 +91,7 @@ def extract_tags(stem: str) -> list[str]:
     for m in _ASPECT_RE.finditer(s):
         w, h = int(m.group(1)), int(m.group(2))
         if w > 0 and h > 0:
-            add(f"{w}:{h}")
+            add(f"{w}x{h}")
 
     return sorted(tags, key=str.lower)
 
@@ -185,7 +185,14 @@ class SetResult:
     set_path: Path           # absolute on-disk path to the set
     rel_set: str             # e.g. "Canon/EOS R5"
     new: int = 0
-    refreshed: int = 0
+    # `verified`: existing entry's stored sha256 matched the disk file.
+    verified: int = 0
+    # `unverifiable`: existing entry without a stored sha256 (nothing to
+    # compare to), or the file could not be read.
+    unverifiable: int = 0
+    # (rel_path, claimed_sha or None, computed_sha) for each existing
+    # entry whose stored hash disagrees with what's currently on disk.
+    mismatches: list[tuple[str, str | None, str]] = field(default_factory=list)
     abandoned_paths: list[str] = field(default_factory=list)
     skipped_paths: list[str] = field(default_factory=list)
     # Stderr lines collected during processing. Workers append here
@@ -195,6 +202,20 @@ class SetResult:
 
 
 # ---- core ------------------------------------------------------------------
+
+
+def _entry_from_prev(rel: str, prev: dict) -> "FileEntry":
+    """Build a FileEntry from a previously-stored meta row, preserving
+    all known fields verbatim. Used for both the verify path (existing
+    entry still on disk — never rewritten) and the abandoned path
+    (entry preserved even though the file is gone)."""
+    return FileEntry(
+        path=rel,
+        sha256=prev.get("sha256") if isinstance(prev.get("sha256"), str) else None,
+        license=prev.get("license") if isinstance(prev.get("license"), str) else None,
+        tags=list(prev.get("tags") or []),
+        notes=prev.get("notes") if isinstance(prev.get("notes"), str) else None,
+    )
 
 
 def read_first_license_line(set_path: Path) -> str:
@@ -213,9 +234,9 @@ def read_first_license_line(set_path: Path) -> str:
 
 
 def read_note_file(set_path: Path) -> str | None:
-    """Whole NOTE file content (trailing whitespace stripped); `None` if
-    absent or empty. Used as the initial `set.notes` value when a set is
-    being scraped for the first time."""
+    """Whole NOTES file content (trailing whitespace stripped); `None`
+    if absent or empty. Used as the initial `set.notes` value when a set
+    is being scraped for the first time."""
     f = set_path / NOTE_FILE
     if not f.is_file():
         return None
@@ -314,6 +335,32 @@ def process_set(set_path: Path, rel_set: str) -> SetResult:
     for fpath in disk_files:
         rel = fpath.relative_to(set_path).as_posix()
         seen_paths.add(rel)
+
+        if rel in existing_by_path:
+            # Existing entry: preserve verbatim. Only re-hash to verify
+            # the stored claim — never overwrite tags / sha256 / notes /
+            # license on a row that's already curated.
+            prev = existing_by_path[rel]
+            entries.append(_entry_from_prev(rel, prev))
+            claimed = prev.get("sha256") if isinstance(prev.get("sha256"), str) else None
+            if claimed is None:
+                result.unverifiable += 1
+                continue
+            try:
+                computed = sha256_file(fpath)
+            except OSError as e:
+                result.warnings.append(
+                    f"warning: could not verify {rel_set}/{rel}: {e}"
+                )
+                result.unverifiable += 1
+                continue
+            if computed.lower() == claimed.lower():
+                result.verified += 1
+            else:
+                result.mismatches.append((rel, claimed, computed))
+            continue
+
+        # New file (not in the existing meta): fresh hash + tag extraction.
         stem = Path(fpath.name).stem
         try:
             digest = sha256_file(fpath)
@@ -322,43 +369,36 @@ def process_set(set_path: Path, rel_set: str) -> SetResult:
                 f"warning: failed to hash {rel_set}/{rel}: {e}"
             )
             continue
-        tags = extract_tags(stem)
-        # Carry over curated per-file fields when present.
-        prev = existing_by_path.get(rel) or {}
-        notes = prev.get("notes")
-        per_license = prev.get("license")
         entries.append(
             FileEntry(
                 path=rel,
                 sha256=digest,
-                license=per_license if isinstance(per_license, str) else None,
-                tags=tags,
-                notes=notes if isinstance(notes, str) else None,
+                license=None,
+                tags=extract_tags(stem),
+                notes=None,
             )
         )
-        if rel in existing_by_path:
-            result.refreshed += 1
-        else:
-            result.new += 1
+        result.new += 1
 
     # Abandoned: previously declared but no longer on disk. Preserve verbatim.
     for rel, prev in existing_by_path.items():
         if rel in seen_paths:
             continue
         result.abandoned_paths.append(rel)
-        entries.append(
-            FileEntry(
-                path=rel,
-                sha256=prev.get("sha256") if isinstance(prev.get("sha256"), str) else None,
-                license=prev.get("license") if isinstance(prev.get("license"), str) else None,
-                tags=list(prev.get("tags") or []),
-                notes=prev.get("notes") if isinstance(prev.get("notes"), str) else None,
-            )
-        )
+        entries.append(_entry_from_prev(rel, prev))
 
-    meta_text = render_meta(set_info, entries)
-    out_path = set_path / META_FILE
-    out_path.write_text(meta_text, encoding="utf-8")
+    # Only rewrite the meta when something structurally changed: a new
+    # file appeared on disk, or an entry was abandoned. If everything
+    # we found is already in the meta (regardless of mismatch outcomes),
+    # leave the file untouched — that preserves operator-curated
+    # field/file ordering, hand-written comments, etc., and matches the
+    # "do not modify existing entries" mandate at the file level.
+    existed_before = _existing_doc is not None
+    structural_change = result.new > 0 or bool(result.abandoned_paths)
+    if not existed_before or structural_change:
+        meta_text = render_meta(set_info, entries)
+        out_path = set_path / META_FILE
+        out_path.write_text(meta_text, encoding="utf-8")
 
     # Per-set warnings — collected, not printed. main() flushes them in
     # contiguous per-set blocks as each future completes.
@@ -468,8 +508,10 @@ def main(argv: list[str] | None = None) -> int:
 
     total_files = 0
     total_new = 0
-    total_refreshed = 0
+    total_verified = 0
+    total_unverifiable = 0
     total_abandoned = 0
+    mismatch_list: list[tuple[str, str | None, str]] = []
     abandoned_list: list[str] = []
     skipped_list: list[str] = []
 
@@ -495,21 +537,39 @@ def main(argv: list[str] | None = None) -> int:
             # Flush this set's warnings as one contiguous block.
             for w in r.warnings:
                 print(w, file=sys.stderr)
-            total_files += r.new + r.refreshed + len(r.abandoned_paths)
+            total_files += (
+                r.new + r.verified + r.unverifiable
+                + len(r.mismatches) + len(r.abandoned_paths)
+            )
             total_new += r.new
-            total_refreshed += r.refreshed
+            total_verified += r.verified
+            total_unverifiable += r.unverifiable
             total_abandoned += len(r.abandoned_paths)
+            mismatch_list.extend(
+                (f"{rel_set}/{p}", claimed, computed)
+                for p, claimed, computed in r.mismatches
+            )
             abandoned_list.extend(f"{rel_set}/{p}" for p in r.abandoned_paths)
             skipped_list.extend(f"{rel_set}/{p}" for p in r.skipped_paths)
     # Stable summary tail — sort the lists so output is deterministic
     # regardless of completion order.
+    mismatch_list.sort(key=lambda t: t[0])
     abandoned_list.sort()
     skipped_list.sort()
 
+    total_mismatched = len(mismatch_list)
     print(f"\nProcessed {total_files} file(s) across {len(sets)} set(s).")
-    print(f"  New:       {total_new}")
-    print(f"  Refreshed: {total_refreshed}")
-    print(f"  Abandoned: {total_abandoned}")
+    print(f"  New:          {total_new}")
+    print(f"  Verified:     {total_verified}")
+    print(f"  Mismatched:   {total_mismatched}")
+    print(f"  Unverifiable: {total_unverifiable}")
+    print(f"  Abandoned:    {total_abandoned}")
+    if mismatch_list:
+        print("Mismatched checksums (existing meta vs. disk):")
+        for path, claimed, computed in mismatch_list:
+            print(f"  {path}")
+            print(f"    claimed:  {claimed if claimed else '(none)'}")
+            print(f"    computed: {computed}")
     if abandoned_list:
         print("Abandoned files:")
         for p in abandoned_list:
