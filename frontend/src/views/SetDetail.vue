@@ -137,7 +137,8 @@ watch(() => [props.maker, props.model], load);
         toggleable
         class="cat"
       >
-        <div class="table-scroll">
+        <!-- Desktop / tablet: the original DataTable. -->
+        <div class="files-desktop table-scroll">
           <DataTable :value="files" data-key="path" row-hover>
             <Column header="File">
               <template #body="{ data }">
@@ -174,6 +175,50 @@ watch(() => [props.maker, props.model], load);
               </template>
             </Column>
           </DataTable>
+        </div>
+
+        <!-- Mobile: a card list per file. Long filenames and sha256
+             hashes get `.touch-scroll`, which on a narrow viewport
+             becomes a single nowrap line you swipe sideways — so the
+             content never breaks the page width. The download button
+             sits in the bottom-right of each card's meta row. -->
+        <div class="files-mobile">
+          <div v-for="data in files" :key="data.path" class="file-card">
+            <div class="file-card-path touch-scroll" :title="data.path">
+              {{ data.path }}
+            </div>
+            <span v-if="data.tags.length" class="tags sm">
+              <Tag
+                v-for="t in data.tags"
+                :key="t"
+                :value="t"
+                severity="secondary"
+              />
+            </span>
+            <div
+              v-if="data.sha256"
+              class="hash touch-scroll"
+              :title="data.sha256"
+            >
+              <span class="hash-prefix"># sha256</span>
+              {{ data.sha256 }}
+            </div>
+            <div class="file-card-row">
+              <span class="muted">{{ formatBytes(data.size) }}</span>
+              <span class="muted">·</span>
+              <span class="muted">{{ data.license }}</span>
+              <Button
+                label="Download"
+                icon="pi pi-download"
+                size="small"
+                severity="secondary"
+                outlined
+                class="file-card-dl"
+                :loading="downloading.has(data.path)"
+                @click="download(data.path)"
+              />
+            </div>
+          </div>
         </div>
       </Panel>
     </template>
@@ -213,5 +258,70 @@ watch(() => [props.maker, props.model], load);
 }
 .cat {
   margin-bottom: 1rem;
+}
+
+/* ---- responsive: swap DataTable ↔ card list at 720px ----------------- */
+
+/* Default (desktop): show the DataTable, hide the mobile cards. */
+.files-mobile {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .files-desktop {
+    display: none;
+  }
+  .files-mobile {
+    display: block;
+  }
+
+  /* Each card stacks: path / tags / hash / meta-row. The meta-row pins
+     the Download button to the right via margin-left: auto on it. */
+  .file-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--p-content-border-color, rgba(0, 0, 0, 0.08));
+  }
+  .file-card:first-child {
+    border-top: none;
+    padding-top: 0;
+  }
+  .file-card-path {
+    font-weight: 500;
+  }
+  .file-card-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+  }
+  .file-card-row .muted {
+    font-size: 0.85rem;
+  }
+  .file-card-dl {
+    margin-left: auto;
+  }
+
+  /* Long filenames + sha256 hashes: one nowrap line that the user can
+     swipe sideways (overflow-x: auto + -webkit touch behavior). The
+     class is a no-op on desktop, so wrapping behavior is preserved
+     there. */
+  .touch-scroll {
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+    /* Slim scrollbar so it doesn't dominate the card visually. */
+    scrollbar-width: thin;
+  }
+  .touch-scroll::-webkit-scrollbar {
+    height: 3px;
+  }
+  /* Tag chips already wrap; keep them readable on narrow screens. */
+  .tags.sm {
+    margin: 0;
+  }
 }
 </style>
