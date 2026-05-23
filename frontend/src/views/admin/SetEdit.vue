@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
+import { useConfirm } from 'primevue/useconfirm';
 import { api, formatBytes, type SetEdit } from '../../api';
 import PageHeader from '../../components/PageHeader.vue';
 import TagInput from '../../components/TagInput.vue';
@@ -9,6 +10,7 @@ import TagInput from '../../components/TagInput.vue';
 const props = defineProps<{ maker: string; model: string }>();
 const router = useRouter();
 const toast = useToast();
+const confirm = useConfirm();
 
 interface Row {
   old_path: string;
@@ -91,6 +93,58 @@ function buildEdit(): SetEdit {
       license: null,
     })),
   };
+}
+
+// Locally drop a file from the editor list. The actual S3 delete happens
+// on Save — edit_set diffs the new file list against the existing meta
+// and removes any file no longer referenced.
+function removeRow(index: number) {
+  const r = files.value[index];
+  if (!r) return;
+  confirm.require({
+    message: `Remove ${r.old_path} from this set? The file is deleted from storage on save.`,
+    header: 'Remove file',
+    icon: 'pi pi-exclamation-triangle',
+    rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
+    acceptProps: { label: 'Remove', severity: 'danger' },
+    accept: () => {
+      files.value.splice(index, 1);
+    },
+  });
+}
+
+function deleteSet() {
+  confirm.require({
+    message:
+      `Delete the entire ${props.maker} ${props.model} set? ` +
+      'All files and metadata are removed from storage. This cannot be undone.',
+    header: 'Delete set',
+    icon: 'pi pi-exclamation-triangle',
+    rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
+    acceptProps: { label: 'Delete set', severity: 'danger' },
+    accept: async () => {
+      busy.value = true;
+      try {
+        await api.adminSetDelete(props.maker, props.model);
+        toast.add({
+          severity: 'success',
+          summary: 'Set deleted',
+          detail: `${props.maker} ${props.model}`,
+          life: 3000,
+        });
+        router.push('/browse');
+      } catch (e) {
+        toast.add({
+          severity: 'error',
+          summary: 'Delete failed',
+          detail: String(e),
+          life: 6000,
+        });
+      } finally {
+        busy.value = false;
+      }
+    },
+  });
 }
 
 async function save() {
@@ -212,6 +266,15 @@ onMounted(load);
                   outlined
                 />
               </a>
+              <Button
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                rounded
+                title="Remove this file"
+                @click="removeRow(i)"
+              />
             </div>
             <div class="line2">
               <label class="mini full">
@@ -236,12 +299,22 @@ onMounted(load);
 
       <Card>
         <template #content>
-          <Button
-            label="Save"
-            icon="pi pi-save"
-            :loading="busy"
-            @click="save"
-          />
+          <div class="bottom">
+            <Button
+              label="Save"
+              icon="pi pi-save"
+              :loading="busy"
+              @click="save"
+            />
+            <Button
+              label="Delete set"
+              icon="pi pi-trash"
+              severity="danger"
+              outlined
+              :disabled="busy"
+              @click="deleteSet"
+            />
+          </div>
         </template>
       </Card>
     </template>
@@ -314,6 +387,12 @@ onMounted(load);
 .ro {
   padding: 0.4rem 0;
   white-space: nowrap;
+}
+.bottom {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
 }
 .hash {
   margin-top: 0.5rem;

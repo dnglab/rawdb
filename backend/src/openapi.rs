@@ -80,6 +80,7 @@ impl Modify for SecurityAddon {
         admin::reject_pending,
         admin::verify_pending,
         admin::edit_set,
+        admin::delete_set,
         // Admin — user management
         admin::list_users,
         admin::add_user,

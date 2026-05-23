@@ -32,7 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/pending/:upload_id/verify", post(verify_pending))
         .route(
             "/sets/:maker/:model",
-            axum::routing::put(edit_set),
+            axum::routing::put(edit_set).delete(delete_set),
         )
         .route("/users", get(list_users).post(add_user))
         .route(
@@ -514,6 +514,8 @@ pub async fn edit_set(
     // Move renamed files in S3 (copy new, delete old that isn't a target).
     let destinations: std::collections::HashSet<&str> =
         req.files.iter().map(|f| f.path.as_str()).collect();
+    let referenced_old: std::collections::HashSet<&str> =
+        req.files.iter().map(|f| f.old_path.as_str()).collect();
     let mut to_delete: Vec<String> = Vec::new();
     for f in &req.files {
         if f.old_path == f.path {
@@ -524,6 +526,14 @@ pub async fn edit_set(
         state.s3.copy(&src, &dst).await.map_err(AppError::Other)?;
         if !destinations.contains(f.old_path.as_str()) {
             to_delete.push(src);
+        }
+    }
+    // Files in the existing meta but absent from the new request are
+    // intentional removals — drop them from S3 so they don't linger as
+    // orphans under the set prefix.
+    for existing_path in existing_by_old_path.keys() {
+        if !referenced_old.contains(existing_path.as_str()) {
+            to_delete.push(format!("{prefix}{existing_path}"));
         }
     }
     for key in to_delete {
@@ -572,6 +582,57 @@ pub async fn edit_set(
 
     let _ = state.scanner.refresh_one_set(&maker, &model).await;
     Ok(StatusCode::OK)
+}
+
+/// Delete an approved set in its entirety. Wipes
+/// `samples/<maker>/<model>/` (meta + all files) and refreshes the local
+/// cache. Admin only — irreversible.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/sets/{maker}/{model}",
+    tag = "admin",
+    security(("session_cookie" = [])),
+    params(
+        ("maker" = String, Path, description = "Camera maker"),
+        ("model" = String, Path, description = "Camera model"),
+    ),
+    responses(
+        (status = 204, description = "Set removed"),
+        (status = 404, description = "Set does not exist"),
+    ),
+)]
+pub async fn delete_set(
+    _auth: AuthGuard<ADMIN_ONLY>,
+    State(state): State<AppState>,
+    Path((maker, model)): Path<(String, String)>,
+) -> AppResult<StatusCode> {
+    // Existence check — saves an unnecessary delete_prefix on a typo and
+    // gives the UI a meaningful 404 instead of a silent no-op.
+    if state
+        .db
+        .get_set(&maker, &model)
+        .map_err(AppError::Other)?
+        .is_none()
+    {
+        return Err(AppError::NotFound);
+    }
+    let prefix = format!("samples/{maker}/{model}/");
+    state
+        .s3
+        .delete_prefix(&prefix)
+        .await
+        .map_err(AppError::Other)?;
+
+    // Refresh the local cache so the originating pod's UI is immediately
+    // consistent; peers pick it up on the next scanner tick.
+    let scanner = state.scanner.clone();
+    let (m, mo) = (maker.clone(), model.clone());
+    tokio::spawn(async move {
+        if let Err(e) = scanner.refresh_one_set(&m, &mo).await {
+            tracing::warn!(error = ?e, "delete_set: refresh failed");
+        }
+    });
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize, Default, ToSchema)]

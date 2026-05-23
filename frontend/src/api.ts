@@ -335,6 +335,13 @@ export const api = {
       `/api/admin/sets/${enc(maker)}/${enc(model)}`,
       edit,
     ),
+  adminSetDelete: async (maker: string, model: string): Promise<void> => {
+    const url = `/api/admin/sets/${enc(maker)}/${enc(model)}`;
+    const res = await fetch(url, { method: 'DELETE', credentials: 'same-origin' });
+    if (!res.ok && res.status !== 204) {
+      throw await errorFromResponse(url, res);
+    }
+  },
   adminApprove: (
     uploadId: string,
     conflict: string,
