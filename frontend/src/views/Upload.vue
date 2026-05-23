@@ -636,7 +636,7 @@ async function submit() {
               </label>
               <label class="fld">
                 <span>Uploaded by</span>
-                <InputText v-model="set.uploaded_by" placeholder="optional" />
+                <InputText v-model="set.uploaded_by" placeholder="" />
               </label>
               <label class="fld wide">
                 <span>Notes</span>
@@ -720,7 +720,7 @@ async function submit() {
                   <template #body="{ data }">
                     <InputText
                       v-model="data.notesText"
-                      placeholder="optional"
+                      placeholder=""
                       fluid
                     />
                   </template>

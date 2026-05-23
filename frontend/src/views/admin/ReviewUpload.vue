@@ -343,7 +343,7 @@ onMounted(load);
             </label>
             <label class="fld">
               <span>Uploaded by</span>
-              <InputText v-model="setForm.uploaded_by" placeholder="optional" />
+              <InputText v-model="setForm.uploaded_by" placeholder="" />
             </label>
             <label class="fld">
               <span>Uploaded at</span>
@@ -446,7 +446,7 @@ onMounted(load);
             <div class="line3">
               <label class="mini full">
                 <span>Note</span>
-                <InputText v-model="r.notes" placeholder="optional" fluid />
+                <InputText v-model="r.notes" placeholder="" fluid />
               </label>
             </div>
             <div v-if="r.sha256 || r.verify" class="hash-row">
