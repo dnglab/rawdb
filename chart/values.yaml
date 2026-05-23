@@ -278,6 +278,16 @@ gateway:
 # compression.
 # ---------------------------------------------------------------------------
 traefik:
+  # When enabled (and `gateway.enabled` is true), the HTTPRoute backendRef
+  # is swapped from the Service directly to a TraefikService that wraps the
+  # Service with a `highestRandomWeight` load-balancing spec. Use this when
+  # your platform needs HRW (rendezvous-hashing) routing across instances.
+  # Has no effect on the classic Ingress path — only `gateway` mode.
+  highestRandomWeight:
+    enabled: false
+    # Per-service weight; omitted from the rendered spec when 0/empty.
+    weight: 1
+
   middlewares:
     enabled: false
 

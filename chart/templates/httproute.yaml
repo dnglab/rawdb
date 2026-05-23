@@ -43,9 +43,18 @@ spec:
             name: {{ . | quote }}
         {{- end }}
       backendRefs:
+        {{- if $.Values.traefik.highestRandomWeight.enabled }}
+        # HRW mode: route through a TraefikService that wraps the Service
+        # with a `highestRandomWeight` load-balancing spec. No `port` here —
+        # the port lives inside the TraefikService.
+        - group: traefik.io
+          kind: TraefikService
+          name: {{ include "rawdb.fullname" $ }}-hrw
+        {{- else }}
         - group: ""
           kind: Service
           name: {{ include "rawdb.fullname" $ }}
           port: {{ $.Values.service.port }}
+        {{- end }}
     {{- end }}
 {{- end }}

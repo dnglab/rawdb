@@ -272,6 +272,14 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "highestRandomWeight": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "weight": { "type": "integer", "minimum": 0 }
+          }
+        },
         "middlewares": {
           "type": "object",
           "additionalProperties": false,
