@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { createSHA256, type IHasher } from 'hash-wasm';
 import { api, type FilePlan } from '../api';
 import PageHeader from '../components/PageHeader.vue';
 import TagInput from '../components/TagInput.vue';
@@ -21,6 +22,14 @@ interface FileRow {
   // Filled when the file is larger than `maxUploadBytes`. Blocks submit
   // and shows under the row.
   sizeError: string | null;
+  // Lowercase hex SHA-256 of the file content. Computed locally before
+  // upload; written into the `[[files]]` entry in the TOML so consumers
+  // (and the reviewer's Verify button) can validate the bytes.
+  sha256: string | null;
+  // 0..100 — progress of the local hashing pass. Hashing runs before
+  // PUT, so the row's progress bar reuses `progress`; this lets the
+  // status line show "Hashing X (N%)" vs "Uploading X (N%)".
+  hashProgress: number;
 }
 
 const router = useRouter();
@@ -181,6 +190,8 @@ function onPick(e: Event) {
       notesText: '',
       progress: 0,
       sizeError: null,
+      sha256: null,
+      hashProgress: 0,
     };
     checkSize(row);
     rows.value.push(row);
@@ -236,6 +247,7 @@ function buildMetaToml(): string {
   for (const r of rows.value) {
     lines.push('', '[[files]]');
     lines.push(`path = ${q(relPath(r))}`);
+    if (r.sha256) lines.push(`sha256 = ${q(r.sha256)}`);
     const fileTags = cleanTags(r.tags);
     if (fileTags.length) lines.push(`tags = ${arr(fileTags)}`);
     if (r.notesText.trim()) lines.push(`notes = ${q(r.notesText.trim())}`);
@@ -301,6 +313,40 @@ function putFile(
 // writes — there's no byte-range resume — so each attempt re-sends the
 // full file from the start; the progress bar is reset accordingly.
 const MAX_FILE_ATTEMPTS = 3;
+
+// Bytes per chunk fed to the SHA-256 hasher. 8 MiB is a sweet spot for
+// WASM throughput vs. progress-update granularity.
+const HASH_CHUNK = 8 * 1024 * 1024;
+
+// hash-wasm prefers a reused hasher instance.
+let _hasher: IHasher | null = null;
+async function getHasher(): Promise<IHasher> {
+  if (_hasher) {
+    _hasher.init();
+    return _hasher;
+  }
+  _hasher = await createSHA256();
+  _hasher.init();
+  return _hasher;
+}
+
+/// SHA-256 a File in 8 MiB chunks; reports byte progress to the caller.
+/// Returns lowercase hex matching `sha256sum`.
+async function hashFile(
+  file: File,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<string> {
+  const h = await getHasher();
+  let offset = 0;
+  while (offset < file.size) {
+    const end = Math.min(offset + HASH_CHUNK, file.size);
+    const buf = new Uint8Array(await file.slice(offset, end).arrayBuffer());
+    h.update(buf);
+    offset = end;
+    onProgress(offset, file.size);
+  }
+  return h.digest('hex');
+}
 
 async function putWithRetry<T>(
   attempt: () => Promise<T>,
@@ -439,6 +485,29 @@ async function submit() {
   try {
     const maker = set.maker.trim();
     const model = set.model.trim();
+
+    // Hash every file locally before requesting the upload slot. The
+    // hash is sent in the meta TOML at /upload/complete; the reviewer's
+    // "Verify checksums" button re-hashes server-side to confirm.
+    for (let i = 0; i < rows.value.length; i++) {
+      const r = rows.value[i];
+      const label = `${r.file.name} (${i + 1}/${rows.value.length})`;
+      status.value = `Hashing ${label}…`;
+      r.hashProgress = 0;
+      r.progress = 0;
+      try {
+        r.sha256 = await hashFile(r.file, (loaded, total) => {
+          const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
+          r.hashProgress = pct;
+          // Reuse the row's progress bar — hashing is its first phase.
+          r.progress = pct;
+        });
+      } catch (e) {
+        throw new Error(`hashing ${r.file.name} failed: ${String(e)}`);
+      }
+      // Reset to 0 so the upload phase fills it from scratch.
+      r.progress = 0;
+    }
 
     status.value = 'Requesting upload slot…';
     const begin = await api.uploadBegin({
@@ -630,6 +699,9 @@ async function submit() {
                         class="row-progress"
                         style="height: 4px"
                       />
+                      <div v-if="data.sha256" class="hash">
+                        <i class="pi pi-hashtag" /> {{ data.sha256 }}
+                      </div>
                     </div>
                   </template>
                 </Column>
@@ -769,6 +841,18 @@ async function submit() {
 }
 .row-msg {
   margin: 0;
+}
+.hash {
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: var(--p-text-muted-color);
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+.hash .pi-hashtag {
+  font-size: 0.72rem;
+  margin-right: 0.2rem;
+  opacity: 0.7;
 }
 .limit-hint {
   margin-top: 0.5rem;

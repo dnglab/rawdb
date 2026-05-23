@@ -29,6 +29,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/pending/:upload_id/approve", post(approve_pending))
         .route("/pending/:upload_id/reject", post(reject_pending))
+        .route("/pending/:upload_id/verify", post(verify_pending))
         .route(
             "/sets/:maker/:model",
             axum::routing::put(edit_set),
@@ -111,6 +112,10 @@ pub struct PendingFile {
     pub size: u64,
     pub license: Option<String>,
     pub notes: Option<String>,
+    /// Uploader-supplied SHA-256 hex; the reviewer can verify it via
+    /// `POST /api/admin/pending/{upload_id}/verify`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
     pub tags: Vec<String>,
 }
 
@@ -190,6 +195,7 @@ pub async fn get_pending(
             path: f.path.clone(),
             license: f.license.clone(),
             notes: f.notes.clone(),
+            sha256: f.sha256.clone(),
             tags: f.tags.clone(),
         })
         .collect();
@@ -329,6 +335,11 @@ pub async fn edit_pending(
         }
     }
 
+    // Carry server-managed fields (currently: sha256) forward from the
+    // existing meta. The EditFile shape doesn't surface them, so without
+    // this step the edit would silently wipe them.
+    let existing_by_old_path = load_existing_file_meta(&state, &prefix).await;
+
     // Move renamed files in S3 (copy new, delete old afterwards). Targets
     // that collide with another file's old path are handled by deleting
     // only old paths that are not also destinations.
@@ -373,6 +384,9 @@ pub async fn edit_pending(
             .iter()
             .map(|f| FileMeta {
                 path: f.path.trim().to_string(),
+                sha256: existing_by_old_path
+                    .get(&f.old_path)
+                    .and_then(|prev| prev.sha256.clone()),
                 license: f.license.clone().filter(|s| !s.trim().is_empty()),
                 notes: f.notes.clone().filter(|s| !s.trim().is_empty()),
                 tags: clean_tags(&f.tags),
@@ -493,6 +507,10 @@ pub async fn edit_set(
         }
     }
 
+    // Carry server-managed fields (sha256) forward; the edit shape doesn't
+    // surface them.
+    let existing_by_old_path = load_existing_file_meta(&state, &prefix).await;
+
     // Move renamed files in S3 (copy new, delete old that isn't a target).
     let destinations: std::collections::HashSet<&str> =
         req.files.iter().map(|f| f.path.as_str()).collect();
@@ -531,6 +549,9 @@ pub async fn edit_set(
             .iter()
             .map(|f| FileMeta {
                 path: f.path.trim().to_string(),
+                sha256: existing_by_old_path
+                    .get(&f.old_path)
+                    .and_then(|prev| prev.sha256.clone()),
                 license: f.license.clone().filter(|s| !s.trim().is_empty()),
                 notes: f.notes.clone().filter(|s| !s.trim().is_empty()),
                 tags: clean_tags(&f.tags),
@@ -960,4 +981,166 @@ pub async fn reject_pending(
         }
     });
     Ok(StatusCode::OK)
+}
+
+// ---- checksum verification ------------------------------------------------
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VerifyFile {
+    pub path: String,
+    /// `ok` — claimed hash matches; `mismatch` — they differ;
+    /// `missing` — the meta declared no `sha256` so there's nothing to
+    /// compare against (the file was still hashed and `computed` is set).
+    pub status: String,
+    pub claimed: Option<String>,
+    pub computed: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VerifyResult {
+    /// `true` when every file with a claimed hash matched.
+    pub ok: bool,
+    pub total: usize,
+    pub verified: usize,
+    pub mismatched: usize,
+    pub missing: usize,
+    pub files: Vec<VerifyFile>,
+}
+
+/// Stream every file in a pending upload through SHA-256 and compare to
+/// the uploader's claim. Synchronous: the request stays open for the
+/// duration; multi-GB sets can take minutes, so the UI shows a spinner.
+#[utoipa::path(
+    post,
+    path = "/api/admin/pending/{upload_id}/verify",
+    tag = "admin",
+    security(("session_cookie" = [])),
+    params(("upload_id" = String, Path, description = "Upload ID")),
+    responses(
+        (status = 200, body = VerifyResult),
+        (status = 404, description = "Pending upload not found"),
+    ),
+)]
+pub async fn verify_pending(
+    _auth: AuthGuard<REVIEWER_OR_ADMIN>,
+    State(state): State<AppState>,
+    Path(upload_id): Path<String>,
+) -> AppResult<Json<VerifyResult>> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncReadExt;
+
+    let prefix = format!("pending/{upload_id}/");
+
+    // Load the meta to know which files are part of this upload and what
+    // the claimed hashes are.
+    let meta_key = format!("{prefix}rawdb-meta.toml");
+    let (bytes, _) = state.s3.get_bytes(&meta_key).await.map_err(|e| match e {
+        S3Error::NotFound(_) | S3Error::PreconditionFailed => AppError::NotFound,
+        S3Error::Other(e) => AppError::Other(e),
+    })?;
+    let toml = std::str::from_utf8(&bytes)
+        .map_err(|e| AppError::BadRequest(format!("meta not UTF-8: {e}")))?;
+    let parsed = meta::parse(toml)
+        .map_err(|e| AppError::BadRequest(format!("invalid meta: {e}")))?;
+
+    let mut out = Vec::with_capacity(parsed.files.len());
+    let mut verified = 0usize;
+    let mut mismatched = 0usize;
+    let mut missing = 0usize;
+    let total = parsed.files.len();
+
+    for f in &parsed.files {
+        let key = format!("{prefix}{}", f.path);
+        let stream = state.s3.get_stream(&key).await.map_err(|e| match e {
+            S3Error::NotFound(_) => AppError::NotFound,
+            S3Error::PreconditionFailed => AppError::NotFound,
+            S3Error::Other(e) => AppError::Other(e),
+        })?;
+
+        // Hash without buffering the whole object: turn the SDK
+        // ByteStream into an AsyncRead and update Sha256 from 1 MiB
+        // chunks.
+        let mut hasher = Sha256::new();
+        let mut reader = stream.body.into_async_read();
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            let n = reader
+                .read(&mut buf)
+                .await
+                .map_err(|e| AppError::Other(anyhow::anyhow!("read {}: {e}", f.path)))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        let computed: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let claimed = f.sha256.clone();
+        let status = match claimed.as_deref() {
+            None => {
+                missing += 1;
+                "missing"
+            }
+            Some(c) if c.eq_ignore_ascii_case(&computed) => {
+                verified += 1;
+                "ok"
+            }
+            _ => {
+                mismatched += 1;
+                "mismatch"
+            }
+        };
+        out.push(VerifyFile {
+            path: f.path.clone(),
+            status: status.into(),
+            claimed,
+            computed: Some(computed),
+        });
+    }
+
+    Ok(Json(VerifyResult {
+        ok: mismatched == 0,
+        total,
+        verified,
+        mismatched,
+        missing,
+        files: out,
+    }))
+}
+
+/// Best-effort load of the existing `rawdb-meta.toml` under `prefix`,
+/// keyed by file path. Used to carry server-managed fields (sha256) across
+/// reviewer edits — the `EditFile` shape doesn't surface them, so a naive
+/// rebuild would wipe them. Returns an empty map on any error so an edit
+/// can still proceed if the existing meta is missing or malformed.
+async fn load_existing_file_meta(
+    state: &AppState,
+    prefix: &str,
+) -> std::collections::HashMap<String, FileMeta> {
+    use crate::s3::S3Error;
+    let meta_key = format!("{prefix}rawdb-meta.toml");
+    let bytes = match state.s3.get_bytes(&meta_key).await {
+        Ok((b, _)) => b,
+        Err(S3Error::NotFound(_)) | Err(S3Error::PreconditionFailed) => {
+            return std::collections::HashMap::new();
+        }
+        Err(S3Error::Other(e)) => {
+            tracing::warn!(error = %e, key = %meta_key, "load existing meta failed");
+            return std::collections::HashMap::new();
+        }
+    };
+    let Ok(toml) = std::str::from_utf8(&bytes) else {
+        return std::collections::HashMap::new();
+    };
+    let Ok(parsed) = meta::parse(toml) else {
+        return std::collections::HashMap::new();
+    };
+    parsed
+        .files
+        .into_iter()
+        .map(|f| (f.path.clone(), f))
+        .collect()
 }

@@ -150,6 +150,9 @@ watch(() => [props.maker, props.model], load);
                     severity="secondary"
                   />
                 </span>
+                <div v-if="data.sha256" class="hash" :title="data.sha256">
+                  <i class="pi pi-hashtag" /> {{ data.sha256 }}
+                </div>
               </template>
             </Column>
             <Column header="Size">
@@ -194,6 +197,19 @@ watch(() => [props.maker, props.model], load);
 }
 .tags.sm {
   margin: 0.35rem 0 0;
+}
+.hash {
+  margin-top: 0.3rem;
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: var(--p-text-muted-color);
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+.hash .pi-hashtag {
+  font-size: 0.72rem;
+  margin-right: 0.2rem;
+  opacity: 0.7;
 }
 .cat {
   margin-bottom: 1rem;

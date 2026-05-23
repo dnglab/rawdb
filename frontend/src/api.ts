@@ -29,6 +29,7 @@ export interface FileEnvelope {
   size: number;
   license: string;
   notes: string | null;
+  sha256?: string | null;
   tags: string[];
 }
 
@@ -124,7 +125,25 @@ export interface PendingFile {
   size: number;
   license: string | null;
   notes: string | null;
+  sha256?: string | null;
   tags: string[];
+}
+
+export interface VerifyFile {
+  path: string;
+  /// 'ok' | 'mismatch' | 'missing'
+  status: 'ok' | 'mismatch' | 'missing' | string;
+  claimed: string | null;
+  computed: string | null;
+}
+
+export interface VerifyResult {
+  ok: boolean;
+  total: number;
+  verified: number;
+  mismatched: number;
+  missing: number;
+  files: VerifyFile[];
 }
 
 export interface PendingDetail {
@@ -327,6 +346,11 @@ export const api = {
     }),
   adminReject: (uploadId: string) =>
     postNoBody(`/api/admin/pending/${enc(uploadId)}/reject`),
+  adminVerifyPending: (uploadId: string) =>
+    postJSON<VerifyResult>(
+      `/api/admin/pending/${enc(uploadId)}/verify`,
+      {},
+    ),
 };
 
 export function formatBytes(n: number): string {

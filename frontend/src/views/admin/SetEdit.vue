@@ -18,6 +18,7 @@ interface Row {
   size: number;
   tags: string[];
   notes: string;
+  sha256: string | null;
 }
 
 const setForm = reactive({
@@ -65,6 +66,7 @@ async function load() {
           size: f.size,
           tags: [...f.tags],
           notes: f.notes ?? '',
+          sha256: f.sha256 ?? null,
         };
       });
     loaded.value = true;
@@ -223,6 +225,9 @@ onMounted(load);
                 <InputText v-model="r.notes" placeholder="optional" fluid />
               </label>
             </div>
+            <div v-if="r.sha256" class="hash" :title="r.sha256">
+              <i class="pi pi-hashtag" /> {{ r.sha256 }}
+            </div>
             <Divider v-if="i < files.length - 1" />
           </div>
         </template>
@@ -308,6 +313,19 @@ onMounted(load);
 .ro {
   padding: 0.4rem 0;
   white-space: nowrap;
+}
+.hash {
+  margin-top: 0.5rem;
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: var(--p-text-muted-color);
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+.hash .pi-hashtag {
+  font-size: 0.72rem;
+  margin-right: 0.2rem;
+  opacity: 0.7;
 }
 @media (max-width: 720px) {
   .grid {

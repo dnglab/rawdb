@@ -26,6 +26,8 @@ pub struct ExportFileEnvelope {
     pub size: u64,
     pub license: Option<String>,
     pub notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
     pub tags: Vec<String>,
 }
 
@@ -59,6 +61,7 @@ impl From<ExportFile> for ExportFileEnvelope {
             size: f.size,
             license: f.license,
             notes: f.notes,
+            sha256: f.sha256,
             tags: f.tags,
         }
     }

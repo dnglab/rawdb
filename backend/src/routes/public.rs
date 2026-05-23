@@ -139,6 +139,10 @@ pub struct FileEnvelope {
     pub size: u64,
     pub license: String,
     pub notes: Option<String>,
+    /// Lowercase hex SHA-256 of the file content (advisory; surfaced for
+    /// fingerprinting and verifiable on demand from the admin UI).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
     pub tags: Vec<String>,
 }
 
@@ -295,6 +299,7 @@ pub async fn set_detail(
                 size: f.size,
                 license: f.license.unwrap_or_else(|| set.license.clone()),
                 notes: f.notes,
+                sha256: f.sha256,
                 tags,
             });
     }

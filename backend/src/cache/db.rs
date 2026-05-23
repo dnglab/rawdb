@@ -49,6 +49,10 @@ pub struct FileRow {
     pub license: Option<String>,
     pub notes: Option<String>,
     pub etag: Option<String>,
+    /// Lowercase hex SHA-256 of the file content, sourced from the
+    /// uploader's `rawdb-meta.toml` entry. `None` for legacy sets that
+    /// never carried a checksum.
+    pub sha256: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -154,8 +158,8 @@ impl Db {
 
         for (f, size_info) in files_with_sizes {
             tx.execute(
-                "INSERT INTO files(maker, model, path, category, extension, size, license, notes, etag)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO files(maker, model, path, category, extension, size, license, notes, etag, sha256)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     maker,
                     model,
@@ -166,6 +170,7 @@ impl Db {
                     f.license.as_deref(),
                     f.notes.as_deref(),
                     size_info.etag.as_deref(),
+                    f.sha256.as_deref(),
                 ],
             )?;
             for tag in &f.tags {
@@ -261,7 +266,7 @@ impl Db {
     pub fn list_files(&self, maker: &str, model: &str) -> Result<Vec<FileRow>> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "SELECT path, category, extension, size, license, notes, etag
+            "SELECT path, category, extension, size, license, notes, etag, sha256
              FROM files WHERE maker = ? AND model = ? ORDER BY category, path",
         )?;
         let rows = stmt
@@ -274,6 +279,7 @@ impl Db {
                     license: r.get(4)?,
                     notes: r.get(5)?,
                     etag: r.get(6)?,
+                    sha256: r.get(7)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -603,8 +609,8 @@ impl Db {
         )?;
         for (f, size_info) in files_with_sizes {
             tx.execute(
-                "INSERT INTO pending_files(maker, model, upload_id, path, category, extension, size, license, notes, etag)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO pending_files(maker, model, upload_id, path, category, extension, size, license, notes, etag, sha256)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     maker,
                     model,
@@ -616,6 +622,7 @@ impl Db {
                     f.license.as_deref(),
                     f.notes.as_deref(),
                     size_info.etag.as_deref(),
+                    f.sha256.as_deref(),
                 ],
             )?;
         }
@@ -815,7 +822,7 @@ impl Db {
 
         // Files, grouped by (maker, model).
         let mut file_stmt = conn.prepare(
-            "SELECT maker, model, path, category, extension, size, license, notes
+            "SELECT maker, model, path, category, extension, size, license, notes, sha256
              FROM files ORDER BY maker, model, category, path",
         )?;
         let mut files_by_set: HashMap<(String, String), Vec<ExportFile>> =
@@ -830,10 +837,11 @@ impl Db {
                 r.get::<_, i64>(5)?,
                 r.get::<_, Option<String>>(6)?,
                 r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?,
             ))
         })?;
         for row in file_rows {
-            let (maker, model, path, category, extension, size, license, notes) =
+            let (maker, model, path, category, extension, size, license, notes, sha256) =
                 row?;
             let tags = file_tags
                 .get(&(maker.clone(), model.clone(), path.clone()))
@@ -849,6 +857,7 @@ impl Db {
                     size: size.max(0) as u64,
                     license,
                     notes,
+                    sha256,
                     tags,
                 });
         }
@@ -910,6 +919,7 @@ pub struct ExportFile {
     pub size: u64,
     pub license: Option<String>,
     pub notes: Option<String>,
+    pub sha256: Option<String>,
     pub tags: Vec<String>,
 }
 
@@ -1061,6 +1071,7 @@ CREATE TABLE IF NOT EXISTS files (
     license       TEXT,
     notes         TEXT,
     etag          TEXT,
+    sha256        TEXT,
     PRIMARY KEY (maker, model, path),
     FOREIGN KEY (maker, model) REFERENCES sets(maker, model) ON DELETE CASCADE
 );
@@ -1108,6 +1119,7 @@ CREATE TABLE IF NOT EXISTS pending_files (
     license       TEXT,
     notes         TEXT,
     etag          TEXT,
+    sha256        TEXT,
     PRIMARY KEY (maker, model, upload_id, path),
     FOREIGN KEY (maker, model, upload_id) REFERENCES pending_sets(maker, model, upload_id) ON DELETE CASCADE
 );
@@ -1157,6 +1169,7 @@ mod tests {
             },
             files: vec![FileMeta {
                 path: "raw_modes/IMG_0001.cr3".into(),
+                sha256: None,
                 license: None,
                 notes: None,
                 tags: vec!["high-iso".into()],

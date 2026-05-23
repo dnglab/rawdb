@@ -78,6 +78,7 @@ impl Modify for SecurityAddon {
         admin::edit_pending,
         admin::approve_pending,
         admin::reject_pending,
+        admin::verify_pending,
         admin::edit_set,
         // Admin — user management
         admin::list_users,
@@ -127,6 +128,8 @@ impl Modify for SecurityAddon {
         admin::EditFile,
         admin::EditSetRequest,
         admin::ApproveRequest,
+        admin::VerifyResult,
+        admin::VerifyFile,
         admin::UserView,
         admin::AddUserRequest,
         admin::PatchUserRequest,

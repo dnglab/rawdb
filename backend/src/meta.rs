@@ -43,6 +43,11 @@ pub struct SetMeta {
 pub struct FileMeta {
     /// Relative path inside the model directory, must start with a category folder.
     pub path: String,
+    /// Lowercase hex SHA-256 of the file content, computed by the uploader.
+    /// Advisory: surfaced in the UI for fingerprinting and verified on
+    /// demand from the reviewer page; not enforced on every read.
+    #[serde(default)]
+    pub sha256: Option<String>,
     #[serde(default)]
     pub license: Option<String>,
     #[serde(default)]
@@ -175,6 +180,9 @@ pub fn to_toml(meta: &RawdbMeta) -> String {
     for f in &meta.files {
         out.push_str("\n[[files]]\n");
         out.push_str(&format!("path = {}\n", q(&f.path)));
+        if let Some(h) = f.sha256.as_deref().filter(|s| !s.is_empty()) {
+            out.push_str(&format!("sha256 = {}\n", q(h)));
+        }
         if let Some(l) = f.license.as_deref().filter(|s| !s.is_empty()) {
             out.push_str(&format!("license = {}\n", q(l)));
         }
@@ -318,9 +326,31 @@ mod tests {
     }
 
     #[test]
+    fn sha256_round_trips_through_toml() {
+        let toml = r#"
+            [set]
+            maker = "Canon"
+            model = "EOS R5"
+
+            [[files]]
+            path = "raw_modes/IMG_0001.cr3"
+            sha256 = "3789b1ba5d880613104637c40a06619cd9f3b54b0cf62d2d95b9f9e885edcf6e"
+        "#;
+        let m = parse(toml).unwrap();
+        assert_eq!(
+            m.files[0].sha256.as_deref(),
+            Some("3789b1ba5d880613104637c40a06619cd9f3b54b0cf62d2d95b9f9e885edcf6e")
+        );
+        // Re-serialize and re-parse: the hash survives.
+        let again = parse(&to_toml(&m)).unwrap();
+        assert_eq!(again.files[0].sha256, m.files[0].sha256);
+    }
+
+    #[test]
     fn extension_is_lowercased() {
         let f = FileMeta {
             path: "raw_modes/IMG.CR3".into(),
+            sha256: None,
             license: None,
             notes: None,
             tags: vec![],

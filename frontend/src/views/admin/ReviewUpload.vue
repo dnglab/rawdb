@@ -21,6 +21,10 @@ interface EditFileRow {
   tags: string[];
   notes: string;
   selected: boolean;
+  /// Uploader-supplied SHA-256, displayed as the muted third line.
+  sha256: string | null;
+  /// Latest verify result for this row: 'ok' / 'mismatch' / 'missing' / null.
+  verify: 'ok' | 'mismatch' | 'missing' | null;
 }
 
 const setForm = reactive({
@@ -38,6 +42,15 @@ const loaded = ref(false);
 const loading = ref(false);
 const err = ref<string | null>(null);
 const busy = ref(false);
+const verifying = ref(false);
+// Latest verify result summary; populated after the user clicks "Verify".
+const verifyResult = ref<{
+  ok: boolean;
+  total: number;
+  verified: number;
+  mismatched: number;
+  missing: number;
+} | null>(null);
 const conflict = ref<'refuse' | 'merge' | 'replace'>('refuse');
 
 const conflictOptions = [
@@ -88,6 +101,8 @@ async function load() {
         tags: [...f.tags],
         notes: f.notes ?? '',
         selected: true,
+        sha256: f.sha256 ?? null,
+        verify: null,
       };
     });
     loaded.value = true;
@@ -213,6 +228,57 @@ function reject() {
   });
 }
 
+async function verifyChecksums() {
+  verifying.value = true;
+  verifyResult.value = null;
+  // Wipe stale per-row badges before re-running.
+  for (const r of files.value) r.verify = null;
+  try {
+    const res = await api.adminVerifyPending(props.upload_id);
+    verifyResult.value = {
+      ok: res.ok,
+      total: res.total,
+      verified: res.verified,
+      mismatched: res.mismatched,
+      missing: res.missing,
+    };
+    const byPath = new Map(res.files.map((f) => [f.path, f]));
+    for (const r of files.value) {
+      const v = byPath.get(r.old_path);
+      r.verify = v
+        ? (v.status as 'ok' | 'mismatch' | 'missing')
+        : null;
+    }
+    if (res.ok) {
+      toast.add({
+        severity: 'success',
+        summary: 'Checksums verified',
+        detail:
+          res.missing > 0
+            ? `${res.verified}/${res.total} matched; ${res.missing} without a claim.`
+            : `${res.verified}/${res.total} matched.`,
+        life: 4000,
+      });
+    } else {
+      toast.add({
+        severity: 'error',
+        summary: 'Checksum mismatch',
+        detail: `${res.mismatched} of ${res.total} file(s) failed verification.`,
+        life: 6000,
+      });
+    }
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Verify failed',
+      detail: String(e),
+      life: 6000,
+    });
+  } finally {
+    verifying.value = false;
+  }
+}
+
 async function downloadAll() {
   const sel = files.value.filter((f) => f.selected);
   if (sel.length === 0) {
@@ -312,6 +378,15 @@ onMounted(load);
               :disabled="selectedCount === 0"
               @click="downloadAll"
             />
+            <Button
+              label="Verify checksums"
+              icon="pi pi-shield"
+              size="small"
+              severity="secondary"
+              outlined
+              :loading="verifying"
+              @click="verifyChecksums"
+            />
           </div>
         </template>
         <template #content>
@@ -320,6 +395,20 @@ onMounted(load);
             On approve, only checked files are kept; unchecked files are
             deleted. Reject deletes the whole set regardless of checkmarks.
           </p>
+          <Message
+            v-if="verifyResult"
+            :severity="verifyResult.ok ? 'success' : 'error'"
+            :closable="false"
+            class="mb"
+          >
+            {{ verifyResult.verified }}/{{ verifyResult.total }} matched
+            <template v-if="verifyResult.mismatched > 0">
+              · {{ verifyResult.mismatched }} mismatch{{ verifyResult.mismatched === 1 ? '' : 'es' }}
+            </template>
+            <template v-if="verifyResult.missing > 0">
+              · {{ verifyResult.missing }} without claim
+            </template>
+          </Message>
           <div v-for="(r, i) in files" :key="r.old_path" class="frow">
             <div class="line1">
               <Checkbox v-model="r.selected" binary />
@@ -359,6 +448,30 @@ onMounted(load);
                 <span>Note</span>
                 <InputText v-model="r.notes" placeholder="optional" fluid />
               </label>
+            </div>
+            <div v-if="r.sha256 || r.verify" class="hash-row">
+              <span v-if="r.sha256" class="hash" :title="r.sha256">
+                <i class="pi pi-hashtag" /> {{ r.sha256 }}
+              </span>
+              <span v-else class="hash"><i class="pi pi-hashtag" /> no claim</span>
+              <Tag
+                v-if="r.verify === 'ok'"
+                value="verified"
+                severity="success"
+                icon="pi pi-check"
+              />
+              <Tag
+                v-else-if="r.verify === 'mismatch'"
+                value="mismatch"
+                severity="danger"
+                icon="pi pi-times"
+              />
+              <Tag
+                v-else-if="r.verify === 'missing'"
+                value="no claim"
+                severity="warn"
+                icon="pi pi-question"
+              />
             </div>
             <Divider v-if="i < files.length - 1" />
           </div>
@@ -495,6 +608,28 @@ onMounted(load);
 }
 .decide .sep {
   flex: 1;
+}
+.hash-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+.hash {
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: var(--p-text-muted-color);
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+.hash .pi-hashtag {
+  font-size: 0.72rem;
+  margin-right: 0.2rem;
+  opacity: 0.7;
+}
+.mb {
+  margin-bottom: 0.75rem;
 }
 @media (max-width: 720px) {
   .grid {
