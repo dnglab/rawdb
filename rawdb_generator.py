@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import sys
 import tomllib
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
 
 META_FILE = "rawdb-meta.toml"
@@ -184,14 +186,12 @@ class SetResult:
     rel_set: str             # e.g. "Canon/EOS R5"
     new: int = 0
     refreshed: int = 0
-    abandoned_paths: list[str] = None  # type: ignore[assignment]
-    skipped_paths: list[str] = None    # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        if self.abandoned_paths is None:
-            self.abandoned_paths = []
-        if self.skipped_paths is None:
-            self.skipped_paths = []
+    abandoned_paths: list[str] = field(default_factory=list)
+    skipped_paths: list[str] = field(default_factory=list)
+    # Stderr lines collected during processing. Workers append here
+    # instead of printing directly so each set's diagnostics stay
+    # contiguous when emitted by the main thread.
+    warnings: list[str] = field(default_factory=list)
 
 
 # ---- core ------------------------------------------------------------------
@@ -318,9 +318,8 @@ def process_set(set_path: Path, rel_set: str) -> SetResult:
         try:
             digest = sha256_file(fpath)
         except OSError as e:
-            print(
-                f"warning: failed to hash {rel_set}/{rel}: {e}",
-                file=sys.stderr,
+            result.warnings.append(
+                f"warning: failed to hash {rel_set}/{rel}: {e}"
             )
             continue
         tags = extract_tags(stem)
@@ -361,16 +360,15 @@ def process_set(set_path: Path, rel_set: str) -> SetResult:
     out_path = set_path / META_FILE
     out_path.write_text(meta_text, encoding="utf-8")
 
-    # Per-set warnings.
+    # Per-set warnings — collected, not printed. main() flushes them in
+    # contiguous per-set blocks as each future completes.
     for rel in result.abandoned_paths:
-        print(
-            f"warning: abandoned (no longer on disk): {rel_set}/{rel}",
-            file=sys.stderr,
+        result.warnings.append(
+            f"warning: abandoned (no longer on disk): {rel_set}/{rel}"
         )
     for rel in result.skipped_paths:
-        print(
-            f"warning: skipped (no category folder): {rel_set}/{rel}",
-            file=sys.stderr,
+        result.warnings.append(
+            f"warning: skipped (no category folder): {rel_set}/{rel}"
         )
     return result
 
@@ -443,13 +441,30 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional path relative to RAWDB_DIR (a maker or a single set)",
     )
+    ap.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=os.cpu_count() or 1,
+        help="Parallel set workers (default: number of CPU cores). "
+             "Pass 1 to force serial execution.",
+    )
     args = ap.parse_args(argv)
+
+    if args.jobs < 1:
+        print(f"error: --jobs must be >= 1 (got {args.jobs})", file=sys.stderr)
+        return 2
 
     rawdb_dir = Path(args.rawdb_dir)
     sets = discover_sets(rawdb_dir, args.sub_dir)
     if not sets:
         print("note: no sets found; nothing to do.")
         return 0
+
+    # Cap workers at the actual workload so we don't spin up threads
+    # that have nothing to do (one worker per set is the upper bound).
+    workers = min(args.jobs, len(sets))
+    print(f"using {workers} worker(s) across {len(sets)} set(s)")
 
     total_files = 0
     total_new = 0
@@ -458,14 +473,38 @@ def main(argv: list[str] | None = None) -> int:
     abandoned_list: list[str] = []
     skipped_list: list[str] = []
 
-    for set_path, rel_set in sets:
-        r = process_set(set_path, rel_set)
-        total_files += r.new + r.refreshed + len(r.abandoned_paths)
-        total_new += r.new
-        total_refreshed += r.refreshed
-        total_abandoned += len(r.abandoned_paths)
-        abandoned_list.extend(f"{rel_set}/{p}" for p in r.abandoned_paths)
-        skipped_list.extend(f"{rel_set}/{p}" for p in r.skipped_paths)
+    # Sets are independent (each writes its own meta in its own folder)
+    # so we parallelize across them. hashlib.sha256 + file I/O both
+    # release the GIL, so threads scale here without process overhead.
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        fut_to_set = {
+            ex.submit(process_set, sp, rs): rs for sp, rs in sets
+        }
+        for fut in as_completed(fut_to_set):
+            rel_set = fut_to_set[fut]
+            try:
+                r = fut.result()
+            except Exception as e:
+                # Surface the failure but keep draining the pool — one
+                # broken set shouldn't kill the run.
+                print(
+                    f"error: processing {rel_set} failed: {e}",
+                    file=sys.stderr,
+                )
+                continue
+            # Flush this set's warnings as one contiguous block.
+            for w in r.warnings:
+                print(w, file=sys.stderr)
+            total_files += r.new + r.refreshed + len(r.abandoned_paths)
+            total_new += r.new
+            total_refreshed += r.refreshed
+            total_abandoned += len(r.abandoned_paths)
+            abandoned_list.extend(f"{rel_set}/{p}" for p in r.abandoned_paths)
+            skipped_list.extend(f"{rel_set}/{p}" for p in r.skipped_paths)
+    # Stable summary tail — sort the lists so output is deterministic
+    # regardless of completion order.
+    abandoned_list.sort()
+    skipped_list.sort()
 
     print(f"\nProcessed {total_files} file(s) across {len(sets)} set(s).")
     print(f"  New:       {total_new}")
