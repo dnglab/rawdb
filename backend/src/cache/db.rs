@@ -985,6 +985,7 @@ pub enum SortField {
     FileCount,
     TotalSize,
     Tags,
+    UploadedAt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1007,6 +1008,12 @@ impl SortField {
             SortField::FileCount => "file_count",
             SortField::TotalSize => "total_size",
             SortField::Tags => "sort_tags COLLATE NOCASE",
+            // `IFNULL(... , '')` parks sets without a stamp at the
+            // alphabetic-empty end of the range: under the default DESC
+            // ordering that means NULLs sort *last* (real timestamps
+            // first), which is what the browse UI wants. Timestamps are
+            // stored as RFC 3339 strings — lex order matches chronological.
+            SortField::UploadedAt => "IFNULL(s.uploaded_at, '')",
         }
     }
 }
@@ -1161,7 +1168,7 @@ mod tests {
             set: SetMeta {
                 maker: "Canon".into(),
                 model: "EOS R5".into(),
-                license: "CC0-1.0".into(),
+                license: "CC0 1.0".into(),
                 uploaded_by: Some("github:cytrinox".into()),
                 uploaded_at: None,
                 notes: Some("test set".into()),
@@ -1251,7 +1258,7 @@ mod tests {
         db.upsert_set(&meta, Some("etag-1"), &files).unwrap();
 
         let row = db.get_set("Canon", "EOS R5").unwrap().expect("set present");
-        assert_eq!(row.license, "CC0-1.0");
+        assert_eq!(row.license, "CC0 1.0");
         assert_eq!(row.meta_etag.as_deref(), Some("etag-1"));
 
         let frows = db.list_files("Canon", "EOS R5").unwrap();

@@ -31,8 +31,12 @@ const includeSpecial = ref(false);
 // column has a custom body without a field). `sortOrder` is +1 for asc,
 // -1 for desc. We persist the active key in the same shape the backend
 // accepts (asc/desc strings) so a refresh round-trips cleanly.
-const sortField = ref<string | null>(null);
-const sortOrder = ref<1 | -1>(1);
+// Default: most-recently-uploaded sets first. The backend's ORDER BY
+// always appends (maker, model) as a tie-breaker, so two sets with the
+// same uploaded_at fall back to alphabetical model ordering — matching
+// the "uploaded_at DESC, filename ASC" rule.
+const sortField = ref<string | null>('uploaded_at');
+const sortOrder = ref<1 | -1>(-1);
 
 async function reload() {
   loading.value = true;
