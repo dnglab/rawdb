@@ -451,9 +451,13 @@ onMounted(load);
             </div>
             <div v-if="r.sha256 || r.verify" class="hash-row">
               <span v-if="r.sha256" class="hash" :title="r.sha256">
-                <i class="pi pi-hashtag" /> {{ r.sha256 }}
+                <span class="hash-prefix"># sha256</span>
+                {{ r.sha256 }}
               </span>
-              <span v-else class="hash"><i class="pi pi-hashtag" /> no claim</span>
+              <span v-else class="hash">
+                <span class="hash-prefix"># sha256</span>
+                no claim
+              </span>
               <Tag
                 v-if="r.verify === 'ok'"
                 value="verified"
@@ -623,9 +627,8 @@ onMounted(load);
   overflow-wrap: anywhere;
   line-height: 1.3;
 }
-.hash .pi-hashtag {
-  font-size: 0.72rem;
-  margin-right: 0.2rem;
+.hash .hash-prefix {
+  margin-right: 0.4rem;
   opacity: 0.7;
 }
 .mb {

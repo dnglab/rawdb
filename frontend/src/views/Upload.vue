@@ -700,7 +700,8 @@ async function submit() {
                         style="height: 4px"
                       />
                       <div v-if="data.sha256" class="hash">
-                        <i class="pi pi-hashtag" /> {{ data.sha256 }}
+                        <span class="hash-prefix"># sha256</span>
+                        {{ data.sha256 }}
                       </div>
                     </div>
                   </template>
@@ -849,9 +850,8 @@ async function submit() {
   overflow-wrap: anywhere;
   line-height: 1.3;
 }
-.hash .pi-hashtag {
-  font-size: 0.72rem;
-  margin-right: 0.2rem;
+.hash .hash-prefix {
+  margin-right: 0.4rem;
   opacity: 0.7;
 }
 .limit-hint {

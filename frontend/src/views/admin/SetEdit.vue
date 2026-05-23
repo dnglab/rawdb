@@ -226,7 +226,8 @@ onMounted(load);
               </label>
             </div>
             <div v-if="r.sha256" class="hash" :title="r.sha256">
-              <i class="pi pi-hashtag" /> {{ r.sha256 }}
+              <span class="hash-prefix"># sha256</span>
+              {{ r.sha256 }}
             </div>
             <Divider v-if="i < files.length - 1" />
           </div>
@@ -322,9 +323,8 @@ onMounted(load);
   overflow-wrap: anywhere;
   line-height: 1.3;
 }
-.hash .pi-hashtag {
-  font-size: 0.72rem;
-  margin-right: 0.2rem;
+.hash .hash-prefix {
+  margin-right: 0.4rem;
   opacity: 0.7;
 }
 @media (max-width: 720px) {
