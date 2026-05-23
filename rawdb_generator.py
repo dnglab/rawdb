@@ -23,12 +23,13 @@ import sys
 import tomllib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 META_FILE = "rawdb-meta.toml"
 LICENSE_FILE = "LICENSE"
 NOTE_FILE = "NOTES"
-DEFAULT_LICENSE = "CC0-1.0"
+DEFAULT_LICENSE = "CC0 1.0"
 CHUNK = 8 * 1024 * 1024  # 8 MiB — same sweet spot the browser uploader uses
 
 # Files we never include in the [[files]] list.
@@ -204,6 +205,13 @@ class SetResult:
 # ---- core ------------------------------------------------------------------
 
 
+def _now_rfc3339() -> str:
+    """Current UTC timestamp as RFC 3339 (e.g. `2026-05-23T14:32:11Z`).
+    Used to stamp `set.uploaded_at` on a set the script sees for the
+    first time."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _entry_from_prev(rel: str, prev: dict) -> "FileEntry":
     """Build a FileEntry from a previously-stored meta row, preserving
     all known fields verbatim. Used for both the verify path (existing
@@ -326,6 +334,10 @@ def process_set(set_path: Path, rel_set: str) -> SetResult:
         # folder if present. Once the meta exists its `notes` value wins
         # so later UI edits aren't overwritten on re-runs.
         set_info.notes = read_note_file(set_path)
+        # Stamp the moment we first saw this set. Preserved on every
+        # subsequent run (the `if _existing_doc:` branch above carries
+        # the value forward), so this acts as the set's discovery time.
+        set_info.uploaded_at = _now_rfc3339()
 
     disk_files, skipped = walk_set_files(set_path)
     seen_paths: set[str] = set()
