@@ -7,13 +7,16 @@ notes = "Example set seeded by docker compose."
 
 [[files]]
 path = "raw_modes/IMG_0001.cr3"
+sha256 = "6f9a38b7e0605725fcbffeaeb19614d96d73a15fd283422264c0db3a9b7ce69f"
 tags = ["lossless", "14bits", "3:2", "dual-pixel"]
 
 [[files]]
 path = "raw_modes/IMG_0002.cr3"
+sha256 = "8ce48081620a282573aea7bdc5799fc09b2035ff4011665ca286d168790c37bc"
 tags = ["lossy", "high-iso", "14bits", "3:2"]
 
 [[files]]
 path = "crm/MVI_0001.crm"
+sha256 = "db50f624e4f111ff36d29719494f511d809efda992d686452ad963d577817867"
 notes = "Canon raw movie."
 tags = ["lossless", "12bits", "16:9"]

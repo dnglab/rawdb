@@ -9,15 +9,18 @@ special = true
 
 [[files]]
 path = "raw_modes/predictor_01.dng"
+sha256 = "09f774c60f905f3510130f5c6dc5773abe540e12ecb8fd2adb1ff09d64c1bf69"
 notes = "Predictor 1 (no prediction)."
 tags = ["lossless", "predictor-1", "synthetic"]
 
 [[files]]
 path = "raw_modes/predictor_07_jpeg.dng"
+sha256 = "aa3ef2146b34e7124801a9b360ae30968d1625be8626d956bd4c89f14773b576"
 notes = "Lossless JPEG predictor."
 tags = ["lossless", "predictor-7", "synthetic"]
 
 [[files]]
 path = "errors/truncated.dng"
+sha256 = "9e08e9f870dfbd00ca1746e56440b1aa59ddd7a4d884ef115774c6b89aee5e54"
 notes = "Deliberately truncated file for decoder error-path testing."
 tags = ["error-trigger", "synthetic"]

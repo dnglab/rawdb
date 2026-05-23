@@ -7,4 +7,5 @@ notes = "Example pending upload."
 
 [[files]]
 path = "raw_modes/DSC_0001.nef"
+sha256 = "963a1ab7864f12c8dbd7a821ac27ef9ae2ea56fa2728face67ed825dd54feefd"
 tags = ["lossless", "14bits", "3:2"]
