@@ -25,11 +25,12 @@ from pathlib import Path
 
 META_FILE = "rawdb-meta.toml"
 LICENSE_FILE = "LICENSE"
+NOTE_FILE = "NOTE"
 DEFAULT_LICENSE = "CC0-1.0"
 CHUNK = 8 * 1024 * 1024  # 8 MiB — same sweet spot the browser uploader uses
 
 # Files we never include in the [[files]] list.
-SKIP_NAMES = {META_FILE, LICENSE_FILE}
+SKIP_NAMES = {META_FILE, LICENSE_FILE, NOTE_FILE}
 
 
 # ---- tag extraction -------------------------------------------------------
@@ -211,6 +212,21 @@ def read_first_license_line(set_path: Path) -> str:
     return DEFAULT_LICENSE
 
 
+def read_note_file(set_path: Path) -> str | None:
+    """Whole NOTE file content (trailing whitespace stripped); `None` if
+    absent or empty. Used as the initial `set.notes` value when a set is
+    being scraped for the first time."""
+    f = set_path / NOTE_FILE
+    if not f.is_file():
+        return None
+    try:
+        text = f.read_text(encoding="utf-8", errors="replace").rstrip()
+    except OSError as e:
+        print(f"warning: could not read {f}: {e}", file=sys.stderr)
+        return None
+    return text or None
+
+
 def load_existing_meta(set_path: Path) -> tuple[dict | None, dict[str, dict]]:
     """Parse the existing meta if any; return (raw_doc, {path: file_entry})."""
     f = set_path / META_FILE
@@ -284,6 +300,11 @@ def process_set(set_path: Path, rel_set: str) -> SetResult:
                 set_info.uploaded_at = ua.isoformat() if ua else None
             set_info.notes = (s.get("notes") or None) or None
             set_info.special = bool(s.get("special") or False)
+    else:
+        # First-time scrape: seed set.notes from a NOTE file in the set
+        # folder if present. Once the meta exists its `notes` value wins
+        # so later UI edits aren't overwritten on re-runs.
+        set_info.notes = read_note_file(set_path)
 
     disk_files, skipped = walk_set_files(set_path)
     seen_paths: set[str] = set()
