@@ -482,7 +482,14 @@ pub async fn download(
     // Second-tier, per-instance rate limit on sample downloads. Checked
     // before any DB/S3 work so abuse is rejected cheaply. A valid personal
     // API key (`X-API-Key`) from an `unlimited`-role user bypasses it.
-    let has_api_key = crate::apikey::lookup(&state.db, &headers).is_some();
+    // A *lookup error* (DB pool exhausted etc.) is surfaced as 5xx so we
+    // never silently downgrade an authenticated request to anonymous.
+    let has_api_key = crate::apikey::lookup(&state.db, &headers)
+        .map_err(|e| {
+            tracing::error!(error = %e, "apikey lookup failed on download");
+            AppError::Other(e)
+        })?
+        .is_some();
     if state.downloads.enabled() && !has_api_key {
         let ip = client_ip(&headers, peer);
         if let crate::ratelimit::Decision::Limited { retry_after } =

@@ -101,8 +101,13 @@ pub async fn export(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<ExportResponse>> {
-    if apikey::lookup(&state.db, &headers).is_none() {
-        return Err(AppError::Unauthorized);
+    match apikey::lookup(&state.db, &headers) {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(AppError::Unauthorized),
+        Err(e) => {
+            tracing::error!(error = %e, "apikey lookup failed on export");
+            return Err(AppError::Other(e));
+        }
     }
     let sets: Vec<ExportSetEnvelope> = state
         .db

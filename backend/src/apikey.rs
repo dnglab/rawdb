@@ -37,24 +37,41 @@ pub fn hash(key: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Resolve an `X-API-Key` request header to its owning user, or `None`
-/// when the header is absent, malformed, or the key doesn't currently
-/// authorize anything.
+/// Resolve an `X-API-Key` request header to its owning user.
 ///
-/// The check is intentionally re-evaluated live against the cache: a user
-/// who is blocked or who has lost the `unlimited` role no longer passes,
-/// even though their key string is unchanged.
-pub fn lookup(db: &Db, headers: &HeaderMap) -> Option<UserRow> {
-    let raw = headers.get(API_KEY_HEADER)?.to_str().ok()?.trim();
+/// - `Ok(Some(user))` — header present, key matches a non-blocked
+///   `unlimited`-role user.
+/// - `Ok(None)` — header absent, malformed, or doesn't authorize
+///   anything (no matching user / blocked / wrong role).
+/// - `Err(_)` — the lookup itself failed (DB pool exhausted, SQLite
+///   error, etc.). Callers must surface this as 5xx instead of
+///   silently downgrading the request to anonymous — otherwise a pool
+///   stall would silently turn off the rate-limit bypass for valid
+///   API-key holders. See [crate::routes::public::download] for the
+///   rate-limit bypass contract.
+///
+/// The check is intentionally re-evaluated live against the cache: a
+/// user who is blocked or who has lost the `unlimited` role no longer
+/// passes, even though their key string is unchanged.
+pub fn lookup(db: &Db, headers: &HeaderMap) -> anyhow::Result<Option<UserRow>> {
+    let Some(raw) = headers
+        .get(API_KEY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+    else {
+        return Ok(None);
+    };
     if raw.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let user = db.find_user_by_api_key_hash(&hash(raw)).ok()??;
+    let Some(user) = db.find_user_by_api_key_hash(&hash(raw))? else {
+        return Ok(None);
+    };
     if user.blocked {
-        return None;
+        return Ok(None);
     }
     if !user.roles.iter().any(|r| r == ROLE_UNLIMITED) {
-        return None;
+        return Ok(None);
     }
-    Some(user)
+    Ok(Some(user))
 }

@@ -92,8 +92,13 @@ impl Db {
                      PRAGMA temp_store = MEMORY;",
                 )
             });
+        // SQLite WAL lets readers scale; the writers (scanner, user
+        // edits) serialize regardless of pool size. 128 leaves plenty
+        // of headroom for parallel HTTP work without ever stalling the
+        // API-key bypass lookup, which would otherwise silently fail
+        // open and drop callers onto the per-IP download rate limiter.
         let pool = Pool::builder()
-            .max_size(8)
+            .max_size(128)
             .build(manager)
             .context("build sqlite pool")?;
 
