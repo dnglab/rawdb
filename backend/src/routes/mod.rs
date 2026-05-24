@@ -76,10 +76,16 @@ pub fn build_router(state: AppState) -> Router {
 
 /// Records `http.requests`, `http.requests.duration` and (on 5xx)
 /// `core.internal_errors` for every request that reaches the main router.
-/// Attributes are intentionally low cardinality: HTTP method + the
-/// numeric status code (≲60 distinct values).
+/// Attributes: HTTP method, numeric status code, and `username` —
+/// resolved from a valid `X-API-Key` header (the owning user's `sub`)
+/// or `"public"` for anonymous/cookie-authed traffic. Cardinality stays
+/// bounded because API keys are only minted for operator-approved
+/// `unlimited`-role users.
 async fn track_http(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let method = req.method().as_str().to_owned();
+    let username = crate::apikey::lookup(&state.db, req.headers())
+        .map(|u| u.sub)
+        .unwrap_or_else(|| "public".to_owned());
     let start = std::time::Instant::now();
     let resp = next.run(req).await;
     let status = resp.status();
@@ -87,6 +93,7 @@ async fn track_http(State(state): State<AppState>, req: Request, next: Next) -> 
     let attrs = [
         KeyValue::new("method", method.clone()),
         KeyValue::new("status_code", status.as_u16() as i64),
+        KeyValue::new("username", username.clone()),
     ];
     state.metrics.http_requests.add(1, &attrs);
     state
@@ -100,6 +107,7 @@ async fn track_http(State(state): State<AppState>, req: Request, next: Next) -> 
                 KeyValue::new("source", "http"),
                 KeyValue::new("method", method),
                 KeyValue::new("status_code", status.as_u16() as i64),
+                KeyValue::new("username", username),
             ],
         );
     }
