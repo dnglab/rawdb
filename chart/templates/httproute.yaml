@@ -43,13 +43,15 @@ spec:
             name: {{ . | quote }}
         {{- end }}
       backendRefs:
-        {{- if $.Values.traefik.highestRandomWeight.enabled }}
-        # HRW mode: route through a TraefikService that wraps the Service
-        # with a `highestRandomWeight` load-balancing spec. No `port` here —
-        # the port lives inside the TraefikService.
+        {{- if $.Values.traefik.traefikService.enabled }}
+        # TraefikService mode: route through a `weighted` TraefikService
+        # so optional sticky-cookie session affinity pins each browser to
+        # one pod (mitigates inter-pod cache warm-up windows and keeps the
+        # per-pod download rate-limit state consistent per client). Port
+        # lives inside the TraefikService, so no `port` here.
         - group: traefik.io
           kind: TraefikService
-          name: {{ include "rawdb.fullname" $ }}-hrw
+          name: {{ include "rawdb.fullname" $ }}-weighted
         {{- else }}
         - group: ""
           kind: Service

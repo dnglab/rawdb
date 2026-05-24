@@ -273,12 +273,41 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "highestRandomWeight": {
+        "traefikService": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
-            "weight": { "type": "integer", "minimum": 0 }
+            "weighted": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "weight": { "type": "integer", "minimum": 0 },
+                "sticky": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "cookie": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": { "type": "string" },
+                        "secure": { "type": "boolean" },
+                        "httpOnly": { "type": "boolean" },
+                        "sameSite": {
+                          "type": "string",
+                          "enum": ["", "none", "lax", "strict"]
+                        },
+                        "maxAge": { "type": "integer", "minimum": 0 },
+                        "path": { "type": "string" },
+                        "domain": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "middlewares": {

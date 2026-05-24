@@ -285,14 +285,39 @@ gateway:
 # ---------------------------------------------------------------------------
 traefik:
   # When enabled (and `gateway.enabled` is true), the HTTPRoute backendRef
-  # is swapped from the Service directly to a TraefikService that wraps the
-  # Service with a `highestRandomWeight` load-balancing spec. Use this when
-  # your platform needs HRW (rendezvous-hashing) routing across instances.
+  # is swapped from the Service directly to a `weighted` TraefikService
+  # with optional sticky-cookie session affinity. The cookie pins each
+  # browser to one pod, which avoids two visible artefacts of multi-pod
+  # deployments: the per-pod download rate-limit window resets on every
+  # pod hop, and a freshly uploaded set briefly disappears for clients
+  # whose request lands on a pod that hasn't picked it up from S3 yet.
   # Has no effect on the classic Ingress path — only `gateway` mode.
-  highestRandomWeight:
+  traefikService:
     enabled: false
-    # Per-service weight; omitted from the rendered spec when 0/empty.
-    weight: 1
+    weighted:
+      # Per-service weight; omitted from the rendered spec when 0/empty.
+      weight: 1
+      sticky:
+        # Whether to emit `spec.weighted.sticky` on the TraefikService.
+        # Disable to get a plain weighted LB with no affinity at all.
+        enabled: true
+        cookie:
+          # Empty = let Traefik pick a default name. Set to something
+          # recognisable when debugging.
+          name: "rawdb_sticky"
+          # Set to false if your gateway terminates TLS upstream and the
+          # backend sees plain HTTP — browsers will drop a Secure cookie
+          # in that case.
+          secure: true
+          httpOnly: true
+          # none | lax | strict. Use "none" only if Secure is also true.
+          sameSite: lax
+          # 0 = session cookie (cleared on browser close). Set seconds
+          # to make it persistent across browser restarts.
+          maxAge: 0
+          # Leave empty for Traefik's defaults.
+          path: ""
+          domain: ""
 
   middlewares:
     enabled: false
