@@ -3,7 +3,7 @@
 [set]
 maker = "dnglab"
 model = "full-predictor-set"
-license = "CC0-1.0"
+license = "CC0 1.0"
 notes = "Software-generated samples covering all DNG predictors."
 special = true
 

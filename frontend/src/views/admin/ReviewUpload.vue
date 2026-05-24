@@ -30,7 +30,7 @@ interface EditFileRow {
 const setForm = reactive({
   maker: '',
   model: '',
-  license: 'CC0-1.0',
+  license: 'CC0 1.0',
   uploaded_by: '',
   uploaded_at: '' as string | null,
   notes: '',
@@ -121,7 +121,7 @@ function buildEdit(): PendingEdit {
   return {
     maker: setForm.maker.trim(),
     model: setForm.model.trim(),
-    license: setForm.license.trim() || 'CC0-1.0',
+    license: setForm.license.trim() || 'CC0 1.0',
     notes: setForm.notes.trim() ? setForm.notes.trim() : null,
     uploaded_by: setForm.uploaded_by.trim() ? setForm.uploaded_by.trim() : null,
     special: setForm.special,

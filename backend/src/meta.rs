@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const DEFAULT_LICENSE: &str = "CC0-1.0";
+pub const DEFAULT_LICENSE: &str = "CC0 1.0";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawdbMeta {
@@ -234,7 +234,7 @@ mod tests {
 
             [[files]]
             path = "raw_modes/IMG_0001.cr3"
-            license = "CC0-1.0"
+            license = "CC0 1.0"
             tags = ["high-iso"]
             notes = "low-light"
         "#;

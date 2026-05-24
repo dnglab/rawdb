@@ -24,7 +24,7 @@ interface Row {
 }
 
 const setForm = reactive({
-  license: 'CC0-1.0',
+  license: 'CC0 1.0',
   uploaded_by: '',
   uploaded_at: '' as string | null,
   notes: '',
@@ -81,7 +81,7 @@ async function load() {
 
 function buildEdit(): SetEdit {
   return {
-    license: setForm.license.trim() || 'CC0-1.0',
+    license: setForm.license.trim() || 'CC0 1.0',
     special: setForm.special,
     notes: setForm.notes.trim() ? setForm.notes.trim() : null,
     uploaded_by: setForm.uploaded_by.trim() ? setForm.uploaded_by.trim() : null,
@@ -206,7 +206,7 @@ onMounted(load);
               <span>License</span>
               <Select
                 v-model="setForm.license"
-                :options="['CC0-1.0']"
+                :options="['CC0 1.0']"
                 fluid
               />
             </label>

@@ -35,7 +35,7 @@ s3://<bucket>/
 [set]
 maker = "Canon"
 model = "EOS R5"
-license = "CC0-1.0"
+license = "CC0 1.0"
 
 [[files]]
 path = "raw_modes/IMG_0001.cr3"

@@ -37,7 +37,7 @@ const router = useRouter();
 const set = reactive({
   maker: '',
   model: '',
-  license: 'CC0-1.0',
+  license: 'CC0 1.0',
   notes: '',
   uploaded_by: '',
 });
@@ -239,7 +239,7 @@ function buildMetaToml(): string {
   const lines: string[] = ['[set]'];
   lines.push(`maker = ${q(set.maker.trim())}`);
   lines.push(`model = ${q(set.model.trim())}`);
-  lines.push(`license = ${q(set.license.trim() || 'CC0-1.0')}`);
+  lines.push(`license = ${q(set.license.trim() || 'CC0 1.0')}`);
   if (set.uploaded_by.trim())
     lines.push(`uploaded_by = ${q(set.uploaded_by.trim())}`);
   if (set.notes.trim()) lines.push(`notes = ${q(set.notes.trim())}`);
@@ -630,7 +630,7 @@ async function submit() {
                 <span>License</span>
                 <Select
                   v-model="set.license"
-                  :options="['CC0-1.0']"
+                  :options="['CC0 1.0']"
                   fluid
                 />
               </label>
