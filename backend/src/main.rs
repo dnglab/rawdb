@@ -34,11 +34,24 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    // Subscriber is set up before Config::parse so config-parse errors are
+    // still logged. RAWDB_LOG_FORMAT is read directly from env here for the
+    // same reason; it's also declared on `Config` so it surfaces in --help.
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    match std::env::var("RAWDB_LOG_FORMAT").as_deref() {
+        Ok("json") => {
+            tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .json()
+                .init();
+        }
+        _ => {
+            tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .init();
+        }
+    }
 
     let config = Config::parse_and_validate()?;
     tracing::info!(bind = %config.bind, "starting rawdb");

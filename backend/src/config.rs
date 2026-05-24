@@ -198,6 +198,19 @@ pub struct Config {
     /// production environments where the docs surface shouldn't be public.
     #[arg(long, env = "RAWDB_DOCS_ENABLED", default_value_t = true)]
     pub docs_enabled: bool,
+
+    /// Output format for tracing logs. `text` (default) emits the
+    /// human-readable `tracing_subscriber::fmt` format; `json` emits
+    /// one JSON object per event, which container log aggregators
+    /// (Loki, Elastic, GCP/AWS log routers) can ingest without parsing.
+    #[arg(long, env = "RAWDB_LOG_FORMAT", default_value = "text")]
+    pub log_format: LogFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum LogFormat {
+    Text,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]

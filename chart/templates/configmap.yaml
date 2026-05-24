@@ -49,3 +49,4 @@ data:
   {{- end }}
   {{- end }}
   RUST_LOG: {{ .Values.config.logLevel | quote }}
+  RAWDB_LOG_FORMAT: {{ .Values.config.logFormat | quote }}

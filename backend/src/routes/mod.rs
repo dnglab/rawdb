@@ -65,6 +65,10 @@ pub fn build_router(state: AppState) -> Router {
         // the metrics listener's /metrics scrapes shouldn't pollute the
         // request counters.
         .layer(middleware::from_fn_with_state(state.clone(), track_http))
+        // One structured access log line per request at INFO. Sits next to
+        // `track_http` so it sees the same wall-clock window and the same
+        // post-handler status.
+        .layer(middleware::from_fn(access_log))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -99,6 +103,44 @@ async fn track_http(State(state): State<AppState>, req: Request, next: Next) -> 
             ],
         );
     }
+    resp
+}
+
+/// Emits one INFO log per request: `method`, `path`, `status`,
+/// `client_ip`, `duration_ms`. `client_ip` honors `X-Forwarded-For`
+/// (leftmost) / `X-Real-IP` before falling back to the TCP peer — pods
+/// usually sit behind an ingress, so the peer is the proxy.
+async fn access_log(
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+    let ip = {
+        let h = req.headers();
+        if let Some(xff) = h.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            xff.split(',')
+                .next()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or_else(|| peer.ip())
+        } else if let Some(xri) = h.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+            xri.trim().parse().unwrap_or_else(|_| peer.ip())
+        } else {
+            peer.ip()
+        }
+    };
+    let start = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let duration_ms = (start.elapsed().as_secs_f64() * 1000.0).round() as u64;
+    tracing::info!(
+        method = %method,
+        path = %path,
+        status = resp.status().as_u16(),
+        client_ip = %ip,
+        duration_ms = duration_ms,
+        "http_request"
+    );
     resp
 }
 

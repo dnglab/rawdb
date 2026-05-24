@@ -62,7 +62,7 @@ url = "2"
 thiserror = "1"
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 percent-encoding = "2"
 futures = "0.3"
 async-trait = "0.1"

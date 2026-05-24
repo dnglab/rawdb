@@ -67,6 +67,12 @@ config:
   # from requiring `secret.data.adminPassword*` keys.
   passwordAuthEnabled: true
   logLevel: "rawdb=info,tower_http=info"
+  # Log output format. `text` is the default human-readable layout;
+  # `json` emits one JSON object per event for log aggregators (Loki,
+  # Elasticsearch, GCP/AWS log routers). Per-request access lines —
+  # method, path, status, client_ip, duration_ms — are emitted at INFO
+  # in either format.
+  logFormat: text  # text | json
 
   # Serve interactive OpenAPI docs at /docs and the spec at /openapi.json.
   # Disable in locked-down environments where the docs surface shouldn't

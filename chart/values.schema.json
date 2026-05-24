@@ -74,6 +74,7 @@
         "sessionTtlSecs": { "type": "integer", "minimum": 1 },
         "passwordAuthEnabled": { "type": "boolean" },
         "logLevel": { "type": "string" },
+        "logFormat": { "type": "string", "enum": ["text", "json"] },
         "docsEnabled": { "type": "boolean" },
         "s3": {
           "type": "object",
