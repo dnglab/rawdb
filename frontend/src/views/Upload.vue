@@ -312,7 +312,7 @@ function putFile(
 // giving up and aborting the whole set. S3 presigned PUTs are whole-object
 // writes — there's no byte-range resume — so each attempt re-sends the
 // full file from the start; the progress bar is reset accordingly.
-const MAX_FILE_ATTEMPTS = 3;
+const MAX_FILE_ATTEMPTS = 10;
 
 // Bytes per chunk fed to the SHA-256 hasher. 8 MiB is a sweet spot for
 // WASM throughput vs. progress-update granularity.
