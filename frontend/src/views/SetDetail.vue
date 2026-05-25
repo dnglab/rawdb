@@ -5,6 +5,9 @@ import { useToast } from 'primevue/usetoast';
 import { api, formatBytes, type SetDetail } from '../api';
 import PageHeader from '../components/PageHeader.vue';
 import { useAuth } from '../auth';
+// Pre-rendered to HTML at build time by the markdown plugin in
+// vite.config.ts — see license-info.inc.md for the source.
+import licenseInfoHtml from '../license-info.inc.md';
 
 const props = defineProps<{ maker: string; model: string }>();
 const router = useRouter();
@@ -221,6 +224,15 @@ watch(() => [props.maker, props.model], load);
           </div>
         </div>
       </Panel>
+
+      <Panel
+        header="License info"
+        toggleable
+        :collapsed="true"
+        class="cat license-info"
+      >
+        <div class="license-info-body" v-html="licenseInfoHtml" />
+      </Panel>
     </template>
   </section>
 </template>
@@ -258,6 +270,21 @@ watch(() => [props.maker, props.model], load);
 }
 .cat {
   margin-bottom: 1rem;
+}
+/* Reset the per-paragraph margins so the rendered markdown sits
+   comfortably inside the Panel without an oversized top gap. */
+.license-info-body :deep(h2),
+.license-info-body :deep(h3) {
+  margin-top: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.license-info-body :deep(h2):first-child,
+.license-info-body :deep(h3):first-child {
+  margin-top: 0;
+}
+.license-info-body :deep(p),
+.license-info-body :deep(ul) {
+  margin: 0.5rem 0;
 }
 
 /* ---- responsive: swap DataTable ↔ card list at 720px ----------------- */
