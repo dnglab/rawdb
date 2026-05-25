@@ -173,6 +173,12 @@ function openSet(s: SetSummary) {
         <Column field="total_size" header="Size" sortable>
           <template #body="{ data }">{{ formatBytes(data.total_size) }}</template>
         </Column>
+        <Column field="uploaded_at" header="Uploaded" sortable>
+          <template #body="{ data }">
+            <span v-if="data.uploaded_at">{{ data.uploaded_at }}</span>
+            <span v-else class="muted">—</span>
+          </template>
+        </Column>
         <Column field="license" header="License" sortable />
         <Column field="tags" header="Tags" sortable>
           <template #body="{ data }">
