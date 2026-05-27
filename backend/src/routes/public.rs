@@ -505,7 +505,7 @@ pub async fn download(
     // presigned URL or opening a stream — keeps misses cheap.
     let conn = state
         .db
-        .pool()
+        .reader()
         .get()
         .map_err(|e| AppError::Other(e.into()))?;
     let exists: bool = conn

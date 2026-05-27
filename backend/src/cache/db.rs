@@ -8,7 +8,13 @@
 //! authoritative state is in S3 anyway).
 //!
 //! All write paths go through a thread on the blocking pool because
-//! rusqlite is sync. Reads use the same r2d2 pool.
+//! rusqlite is sync. Reads and writes use *separate* r2d2 pools: the
+//! reader is opened with `SQLITE_OPEN_READ_ONLY`, so any handler that
+//! reaches for a connection via [`Db::reader`] cannot accidentally
+//! mutate the cache — an attempted INSERT/UPDATE/DELETE on those
+//! connections fails at runtime ("attempt to write a readonly
+//! database"). The writer pool is small (SQLite serializes writes
+//! anyway) and is used by the scanner and the admin write paths.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -17,7 +23,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OpenFlags, OptionalExtension};
 
 use crate::meta::{FileMeta, RawdbMeta};
 
@@ -25,7 +31,10 @@ pub type DbPool = Pool<SqliteConnectionManager>;
 
 #[derive(Clone)]
 pub struct Db {
-    pool: DbPool,
+    /// Read-only connections — handed out to HTTP read handlers.
+    reader: DbPool,
+    /// Read-write connections — used by the scanner and admin write paths.
+    writer: DbPool,
 }
 
 #[derive(Debug, Clone)]
@@ -83,36 +92,69 @@ impl Db {
         std::fs::create_dir_all(cache_dir)
             .with_context(|| format!("create cache dir {}", cache_dir.display()))?;
         let path = cache_dir.join("rawdb.sqlite");
-        let manager = SqliteConnectionManager::file(&path)
-            .with_init(|c| {
-                c.execute_batch(
-                    "PRAGMA journal_mode = WAL;
-                     PRAGMA synchronous = NORMAL;
-                     PRAGMA foreign_keys = ON;
-                     PRAGMA temp_store = MEMORY;",
-                )
-            });
-        // SQLite WAL lets readers scale; the writers (scanner, user
-        // edits) serialize regardless of pool size. 128 leaves plenty
-        // of headroom for parallel HTTP work without ever stalling the
-        // API-key bypass lookup, which would otherwise silently fail
-        // open and drop callers onto the per-IP download rate limiter.
-        let pool = Pool::builder()
-            .max_size(128)
-            .build(manager)
-            .context("build sqlite pool")?;
 
-        let db = Self { pool };
+        // Build the writer pool first — it creates the file (if missing)
+        // and applies the PRAGMAs that flip the database into WAL mode.
+        // The reader pool below opens the same file in OS-level read-only
+        // mode and depends on WAL already being established.
+        let writer_manager = SqliteConnectionManager::file(&path).with_init(|c| {
+            c.execute_batch(
+                "PRAGMA journal_mode = WAL;
+                 PRAGMA synchronous = NORMAL;
+                 PRAGMA foreign_keys = ON;
+                 PRAGMA temp_store = MEMORY;",
+            )
+        });
+        // SQLite serializes writes anyway, so a small writer pool is
+        // plenty: the scanner and admin write endpoints rarely overlap.
+        let writer = Pool::builder()
+            .max_size(8)
+            .build(writer_manager)
+            .context("build sqlite writer pool")?;
+
+        let db = Self {
+            // Temporary same-pool reader so migrate() can run before we
+            // open the read-only pool — the readonly handle would error
+            // on the schema DDL.
+            reader: writer.clone(),
+            writer,
+        };
         db.migrate()?;
-        Ok(db)
+
+        // Now that the schema is in place and WAL is on, swap in the
+        // real read-only pool. SQLITE_OPEN_READ_ONLY makes write attempts
+        // fail with "attempt to write a readonly database" at the OS
+        // level — there is no way for a read handler to mutate the cache
+        // via a connection obtained from this pool.
+        let reader_flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI;
+        let reader_manager = SqliteConnectionManager::file(&path)
+            .with_flags(reader_flags)
+            .with_init(|c| c.execute_batch("PRAGMA temp_store = MEMORY;"));
+        // Large reader pool: HTTP handlers (browse, search, download
+        // existence checks, API-key bypass lookup) all draw from here
+        // and must not stall on pool contention.
+        let reader = Pool::builder()
+            .max_size(128)
+            .build(reader_manager)
+            .context("build sqlite reader pool")?;
+
+        Ok(Self {
+            reader,
+            writer: db.writer,
+        })
     }
 
-    pub fn pool(&self) -> &DbPool {
-        &self.pool
+    /// Read-only connection pool. Use this for any code path that only
+    /// issues SELECTs — write attempts on these connections fail with
+    /// "attempt to write a readonly database".
+    pub fn reader(&self) -> &DbPool {
+        &self.reader
     }
 
     fn migrate(&self) -> Result<()> {
-        let conn = self.pool.get()?;
+        let conn = self.writer.get()?;
         conn.execute_batch(SCHEMA_SQL).context("apply schema")?;
         Ok(())
     }
@@ -127,7 +169,7 @@ impl Db {
         meta_etag: Option<&str>,
         files_with_sizes: &[(FileMeta, FileSizeInfo)],
     ) -> Result<()> {
-        let mut conn = self.pool.get()?;
+        let mut conn = self.writer.get()?;
         let tx = conn.transaction()?;
 
         let maker = &meta.set.maker;
@@ -209,7 +251,7 @@ impl Db {
     }
 
     pub fn delete_set(&self, maker: &str, model: &str) -> Result<()> {
-        let mut conn = self.pool.get()?;
+        let mut conn = self.writer.get()?;
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM tags WHERE maker = ? AND model = ?", params![maker, model])?;
         tx.execute("DELETE FROM files WHERE maker = ? AND model = ?", params![maker, model])?;
@@ -220,7 +262,7 @@ impl Db {
     }
 
     pub fn get_set_meta_etag(&self, maker: &str, model: &str) -> Result<Option<String>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let etag: Option<String> = conn
             .query_row(
                 "SELECT meta_etag FROM sets WHERE maker = ? AND model = ?",
@@ -233,7 +275,7 @@ impl Db {
     }
 
     pub fn list_set_keys(&self) -> Result<Vec<(String, String)>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let mut stmt = conn.prepare("SELECT maker, model FROM sets")?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
@@ -242,7 +284,7 @@ impl Db {
     }
 
     pub fn get_set(&self, maker: &str, model: &str) -> Result<Option<SetRow>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let row = conn
             .query_row(
                 "SELECT maker, model, license, notes, uploaded_at, uploaded_by, meta_etag, special
@@ -269,7 +311,7 @@ impl Db {
     }
 
     pub fn list_files(&self, maker: &str, model: &str) -> Result<Vec<FileRow>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let mut stmt = conn.prepare(
             "SELECT path, category, extension, size, license, notes, etag, sha256
              FROM files WHERE maker = ? AND model = ? ORDER BY category, path",
@@ -302,7 +344,7 @@ impl Db {
     ///
     /// `fts` is matched against `sets_fts` (FTS5 over maker/model/notes/tags).
     pub fn search_sets(&self, q: &SetQuery) -> Result<SetSearchPage> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
 
         // Build the WHERE clauses dynamically. We keep this readable rather
         // than clever — every clause appends a bound parameter.
@@ -348,9 +390,11 @@ impl Db {
             params.push(Box::new(tag.clone()));
         }
 
-        // FTS join.
-        let (fts_join, fts_where) = if let Some(text) = q.fts.as_deref().filter(|s| !s.trim().is_empty()) {
-            params.push(Box::new(text.to_string()));
+        // FTS join. The user-typed string is sanitized into an FTS5 query so
+        // special characters ($, ", :, …) cannot trigger an FTS5 syntax error.
+        let fts_query = q.fts.as_deref().and_then(fts5_sanitize);
+        let (fts_join, fts_where) = if let Some(text) = fts_query {
+            params.push(Box::new(text));
             (
                 "JOIN sets_fts ft ON ft.maker = s.maker AND ft.model = s.model",
                 Some("sets_fts MATCH ?"),
@@ -459,7 +503,7 @@ impl Db {
 
     #[allow(dead_code)] // retained for diagnostics/tests; not in the stats payload
     pub fn count_sets(&self) -> Result<u64> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM sets", [], |r| r.get(0))?;
         Ok(n.max(0) as u64)
     }
@@ -467,7 +511,7 @@ impl Db {
     /// Distinct camera models with samples — camera sets only (non-camera
     /// "special" sets are excluded; they're counted separately).
     pub fn count_models(&self) -> Result<u64> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM (SELECT DISTINCT maker, model FROM sets WHERE special = 0)",
             [],
@@ -478,7 +522,7 @@ impl Db {
 
     /// Number of non-camera ("special") sets.
     pub fn count_special(&self) -> Result<u64> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let n: i64 =
             conn.query_row("SELECT COUNT(*) FROM sets WHERE special = 1", [], |r| r.get(0))?;
         Ok(n.max(0) as u64)
@@ -489,7 +533,7 @@ impl Db {
     /// non-camera "special" sets are excluded so the maker picker stays a
     /// list of real cameras.
     pub fn distinct_makers(&self, include_special: bool) -> Result<Vec<String>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let sql = if include_special {
             "SELECT DISTINCT maker FROM sets ORDER BY maker COLLATE NOCASE"
         } else {
@@ -509,7 +553,7 @@ impl Db {
         &self,
         include_special: bool,
     ) -> Result<Vec<(String, String)>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let sql = if include_special {
             "SELECT DISTINCT maker, model FROM sets
              ORDER BY maker COLLATE NOCASE, model COLLATE NOCASE"
@@ -528,7 +572,7 @@ impl Db {
     /// alphabetically. The frontend slices the head of this list for tag
     /// suggestions; admin UIs can render the full distribution.
     pub fn tag_counts(&self) -> Result<Vec<(String, u64)>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let mut stmt = conn.prepare(
             "SELECT tag, COUNT(*) AS n FROM tags
              GROUP BY tag
@@ -543,21 +587,21 @@ impl Db {
     }
 
     pub fn count_pending(&self) -> Result<u64> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM pending_sets", [], |r| r.get(0))?;
         Ok(n.max(0) as u64)
     }
 
     #[allow(dead_code)] // retained for diagnostics; no longer in the stats payload
     pub fn count_users(&self) -> Result<u64> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
         Ok(n.max(0) as u64)
     }
 
     /// Tags attached to specific files in a set.
     pub fn file_tags(&self, maker: &str, model: &str) -> Result<HashMap<String, Vec<String>>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let mut stmt = conn.prepare(
             "SELECT file_path, tag FROM tags
              WHERE maker = ? AND model = ? AND file_path IS NOT NULL
@@ -582,7 +626,7 @@ impl Db {
         meta_etag: Option<&str>,
         files_with_sizes: &[(FileMeta, FileSizeInfo)],
     ) -> Result<()> {
-        let mut conn = self.pool.get()?;
+        let mut conn = self.writer.get()?;
         let tx = conn.transaction()?;
         let maker = &meta.set.maker;
         let model = &meta.set.model;
@@ -636,7 +680,7 @@ impl Db {
     }
 
     pub fn delete_pending_by_upload_id(&self, upload_id: &str) -> Result<()> {
-        let mut conn = self.pool.get()?;
+        let mut conn = self.writer.get()?;
         let tx = conn.transaction()?;
         // pending_files cascades from pending_sets via FK.
         tx.execute(
@@ -648,7 +692,7 @@ impl Db {
     }
 
     pub fn get_pending_meta_etag(&self, upload_id: &str) -> Result<Option<String>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let etag: Option<String> = conn
             .query_row(
                 "SELECT meta_etag FROM pending_sets WHERE upload_id = ?",
@@ -661,7 +705,7 @@ impl Db {
     }
 
     pub fn list_pending_upload_ids(&self) -> Result<Vec<String>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let mut stmt = conn.prepare("SELECT upload_id FROM pending_sets")?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))?
@@ -672,7 +716,7 @@ impl Db {
     // ---- users --------------------------------------------------------------
 
     pub fn replace_users(&self, etag: Option<&str>, users: &[UserRow]) -> Result<()> {
-        let mut conn = self.pool.get()?;
+        let mut conn = self.writer.get()?;
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM user_roles", [])?;
         tx.execute("DELETE FROM users", [])?;
@@ -705,7 +749,7 @@ impl Db {
     }
 
     pub fn get_users_etag(&self) -> Result<Option<String>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let etag = conn
             .query_row(
                 "SELECT etag FROM users_etag WHERE id = 1",
@@ -720,7 +764,7 @@ impl Db {
     // ---- scan state ---------------------------------------------------------
 
     pub fn set_last_full_scan_at(&self, when: DateTime<Utc>) -> Result<()> {
-        let conn = self.pool.get()?;
+        let conn = self.writer.get()?;
         conn.execute(
             "INSERT OR REPLACE INTO scan_state(id, last_full_scan_at) VALUES (1, ?)",
             params![when.to_rfc3339()],
@@ -729,7 +773,7 @@ impl Db {
     }
 
     pub fn last_full_scan_at(&self) -> Result<Option<DateTime<Utc>>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let raw: Option<String> = conn
             .query_row(
                 "SELECT last_full_scan_at FROM scan_state WHERE id = 1",
@@ -744,7 +788,7 @@ impl Db {
     }
 
     pub fn get_user(&self, sub: &str) -> Result<Option<UserRow>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let user = conn
             .query_row(
                 "SELECT sub, display_name, blocked, added_at, added_by, api_key_hash
@@ -761,7 +805,7 @@ impl Db {
     /// Look up the user owning a given API-key hash. Powers both the
     /// download rate-limit bypass and the key-protected export endpoint.
     pub fn find_user_by_api_key_hash(&self, hash: &str) -> Result<Option<UserRow>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
         let user = conn
             .query_row(
                 "SELECT sub, display_name, blocked, added_at, added_by, api_key_hash
@@ -794,7 +838,7 @@ impl Db {
     /// `/api/export` endpoint. Built from three bulk queries (sets, files,
     /// tags) assembled in memory to avoid an N+1 over >10k sets.
     pub fn export_all(&self) -> Result<Vec<ExportSet>> {
-        let conn = self.pool.get()?;
+        let conn = self.reader.get()?;
 
         // Tags: (maker, model, file_path|NULL, tag). Set-level tags have a
         // NULL file_path. Per the public model, a set's tag list is the
@@ -946,6 +990,39 @@ pub struct ExportSet {
 pub struct FileSizeInfo {
     pub size: u64,
     pub etag: Option<String>,
+}
+
+/// Turn a user-typed search string into a safe FTS5 MATCH query.
+///
+/// FTS5 has its own query syntax (`AND`, `OR`, `NOT`, `col:term`, `term*`,
+/// quoted phrases) and trips on stray punctuation such as `$`, `%`, lone
+/// `-`, or unbalanced quotes. To avoid all of that we normalize *every*
+/// non-alphanumeric character to whitespace — which mirrors what FTS5's
+/// own `unicode61` tokenizer does when it builds the index — then split
+/// into tokens and wrap each in double quotes. Tokens are joined with
+/// spaces (FTS5's implicit AND). Returns `None` when nothing usable
+/// remains, so callers can skip the MATCH clause entirely.
+///
+/// Why drop `-` rather than keep it: a phrase `"-"` is legal FTS5 syntax,
+/// but FTS5 tokenizes the contents and `-` produces zero tokens, which
+/// then surfaces as `syntax error near ""` — exactly the bug we're
+/// guarding against. Hyphenated input like `high-iso` still matches the
+/// indexed tag because the indexer split it the same way (`high`, `iso`),
+/// and adjacent phrases satisfy the MATCH.
+fn fts5_sanitize(s: &str) -> Option<String> {
+    let normalized: String = s
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { ' ' })
+        .collect();
+    let phrases: Vec<String> = normalized
+        .split_whitespace()
+        .map(|tok| format!("\"{tok}\""))
+        .collect();
+    if phrases.is_empty() {
+        None
+    } else {
+        Some(phrases.join(" "))
+    }
 }
 
 /// Escape `\`, `%`, `_` so user-typed wildcards are treated literally in a
@@ -1231,6 +1308,47 @@ mod tests {
     }
 
     #[test]
+    fn fts_search_tolerates_special_characters() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::open(dir.path()).unwrap();
+        db.upsert_set(&sample_meta(), Some("e1"), &[]).unwrap();
+
+        // Bare punctuation used to bubble up as `fts5: syntax error near "$"`
+        // (or `near ""` for lone `-`, because FTS5's tokenizer eats it).
+        for s in [
+            "$", "%", "-", "--", "\"", ":", "AND", "foo($)bar", "-foo-", "  ",
+            "foo-", "foo%", "foo$", // exact inputs reported as still failing
+        ] {
+            let r = db
+                .search_sets(&SetQuery { fts: Some(s.into()), ..Default::default() })
+                .unwrap_or_else(|e| panic!("fts={s:?} failed: {e}"));
+            // We only care that it didn't error — the result count is
+            // incidental and depends on what we choose to keep after sanitization.
+            let _ = r;
+        }
+
+        // A real token still matches the indexed set.
+        let hit = db
+            .search_sets(&SetQuery { fts: Some("Canon".into()), ..Default::default() })
+            .unwrap();
+        assert_eq!(hit.total, 1);
+    }
+
+    #[test]
+    fn fts5_sanitize_strips_unsafe_punctuation() {
+        // Every kind of bare punctuation / structural char must yield None.
+        for empty in ["$", "%", "-", "--", "\"", ":", "()", "   ", ""] {
+            assert_eq!(fts5_sanitize(empty), None, "input {empty:?} should drop to None");
+        }
+        assert_eq!(fts5_sanitize("Canon"), Some("\"Canon\"".into()));
+        assert_eq!(fts5_sanitize("EOS R5"), Some("\"EOS\" \"R5\"".into()));
+        // Hyphens split tokens (matching FTS5's own indexer behavior).
+        assert_eq!(fts5_sanitize("high-iso"), Some("\"high\" \"iso\"".into()));
+        // Punctuation in the middle of a token also splits.
+        assert_eq!(fts5_sanitize("foo$bar"), Some("\"foo\" \"bar\"".into()));
+    }
+
+    #[test]
     fn count_models_matches_distinct_sets() {
         let dir = TempDir::new().unwrap();
         let db = Db::open(dir.path()).unwrap();
@@ -1246,6 +1364,33 @@ mod tests {
         // re-open should be idempotent
         let _db2 = Db::open(dir.path()).unwrap();
         let _ = db;
+    }
+
+    #[test]
+    fn reader_pool_rejects_writes() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::open(dir.path()).unwrap();
+        db.upsert_set(&sample_meta(), Some("e1"), &[]).unwrap();
+
+        // Reads must work…
+        let conn = db.reader().get().unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sets", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+
+        // …but any write attempt must fail at the SQLite layer.
+        let err = conn
+            .execute("DELETE FROM sets", [])
+            .expect_err("reader pool must reject writes");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("readonly") || msg.contains("read-only"),
+            "expected read-only error, got: {msg}"
+        );
+
+        // The set is still there — the writer pool is untouched.
+        assert_eq!(db.count_sets().unwrap(), 1);
     }
 
     #[test]

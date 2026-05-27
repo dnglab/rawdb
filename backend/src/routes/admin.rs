@@ -71,7 +71,7 @@ pub async fn list_pending(
 ) -> AppResult<Json<Vec<PendingRow>>> {
     let conn = state
         .db
-        .pool()
+        .reader()
         .get()
         .map_err(|e| AppError::Other(e.into()))?;
     let mut stmt = conn
@@ -1110,29 +1110,74 @@ pub async fn verify_pending(
     let mut missing = 0usize;
     let total = parsed.files.len();
 
+    // Multi-GB objects can take long enough that a single GetObject's TCP
+    // connection gets reset by S3 / intermediate proxies before the read
+    // finishes. Resume from `bytes_read` via a ranged GET on each failure
+    // — SHA-256 is incremental so the same hasher keeps going.
+    const MAX_RETRIES: u32 = 5;
+    const BUF_SIZE: usize = 4 * 1024 * 1024;
+
     for f in &parsed.files {
         let key = format!("{prefix}{}", f.path);
-        let stream = state.s3.get_stream(&key).await.map_err(|e| match e {
-            S3Error::NotFound(_) => AppError::NotFound,
-            S3Error::PreconditionFailed => AppError::NotFound,
-            S3Error::Other(e) => AppError::Other(e),
-        })?;
-
-        // Hash without buffering the whole object: turn the SDK
-        // ByteStream into an AsyncRead and update Sha256 from 1 MiB
-        // chunks.
         let mut hasher = Sha256::new();
-        let mut reader = stream.body.into_async_read();
-        let mut buf = vec![0u8; 1024 * 1024];
-        loop {
-            let n = reader
-                .read(&mut buf)
-                .await
-                .map_err(|e| AppError::Other(anyhow::anyhow!("read {}: {e}", f.path)))?;
-            if n == 0 {
-                break;
+        let mut buf = vec![0u8; BUF_SIZE];
+        let mut bytes_read: u64 = 0;
+        let mut attempt: u32 = 0;
+
+        'file: loop {
+            let start = (bytes_read > 0).then_some(bytes_read);
+            let stream = match state.s3.get_stream_range(&key, start).await {
+                Ok(s) => s,
+                Err(S3Error::NotFound(_)) | Err(S3Error::PreconditionFailed) => {
+                    return Err(AppError::NotFound);
+                }
+                Err(S3Error::Other(e)) => {
+                    attempt += 1;
+                    if attempt > MAX_RETRIES {
+                        return Err(AppError::Other(anyhow::anyhow!(
+                            "open {} at {bytes_read}: {e}",
+                            f.path
+                        )));
+                    }
+                    tracing::warn!(
+                        error = %e, path = %f.path, attempt, bytes_read,
+                        "verify: reopen failed, retrying",
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        200u64 << attempt.min(5),
+                    ))
+                    .await;
+                    continue 'file;
+                }
+            };
+            let mut reader = stream.body.into_async_read();
+            loop {
+                match reader.read(&mut buf).await {
+                    Ok(0) => break 'file,
+                    Ok(n) => {
+                        hasher.update(&buf[..n]);
+                        bytes_read += n as u64;
+                    }
+                    Err(e) => {
+                        attempt += 1;
+                        if attempt > MAX_RETRIES {
+                            return Err(AppError::Other(anyhow::anyhow!(
+                                "read {} at {bytes_read}: {e}",
+                                f.path
+                            )));
+                        }
+                        tracing::warn!(
+                            error = %e, path = %f.path, attempt, bytes_read,
+                            "verify: stream broke, resuming",
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            200u64 << attempt.min(5),
+                        ))
+                        .await;
+                        continue 'file;
+                    }
+                }
             }
-            hasher.update(&buf[..n]);
         }
         let computed: String = hasher
             .finalize()

@@ -197,20 +197,29 @@ impl S3 {
     /// the bytes straight to the HTTP response without buffering, which is
     /// what the "stream" download mode does.
     pub async fn get_stream(&self, key: &str) -> Result<GetStream, S3Error> {
-        let resp = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-            .map_err(|e| {
-                if is_not_found_get(&e) {
-                    S3Error::NotFound(key.into())
-                } else {
-                    S3Error::Other(anyhow::anyhow!("GetObject {key}: {e}"))
-                }
-            })?;
+        self.get_stream_range(key, None).await
+    }
+
+    /// Like [`get_stream`], but optionally starts at `start` bytes into the
+    /// object via `Range: bytes=<start>-`. Used to resume a streaming read
+    /// after a mid-transfer error without redoing the prefix we already
+    /// hashed.
+    pub async fn get_stream_range(
+        &self,
+        key: &str,
+        start: Option<u64>,
+    ) -> Result<GetStream, S3Error> {
+        let mut req = self.client.get_object().bucket(&self.bucket).key(key);
+        if let Some(s) = start {
+            req = req.range(format!("bytes={s}-"));
+        }
+        let resp = req.send().await.map_err(|e| {
+            if is_not_found_get(&e) {
+                S3Error::NotFound(key.into())
+            } else {
+                S3Error::Other(anyhow::anyhow!("GetObject {key}: {e}"))
+            }
+        })?;
         Ok(GetStream {
             content_length: resp.content_length(),
             content_type: resp.content_type().map(String::from),
