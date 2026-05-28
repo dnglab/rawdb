@@ -44,6 +44,16 @@ spec:
       priorityClassName: {{ . }}
       {{- end }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- if semverCompare ">=1.36.0-0" .Capabilities.KubeVersion.GitVersion }}
+      # User namespaces (KEP-127). Stable as of Kubernetes 1.36, where
+      # the UserNamespacesSupport feature gate is on by default. Setting
+      # `hostUsers: false` runs the pod in its own UID namespace so the
+      # in-container UID 65532 (runAsUser) maps to an unprivileged UID
+      # on the host — a defense-in-depth boundary that limits the blast
+      # radius of a container escape. Skipped on older clusters so we
+      # don't render a field the API server will reject.
+      hostUsers: false
+      {{- end }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: rawdb
