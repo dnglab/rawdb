@@ -74,9 +74,6 @@ pub struct Config {
     #[arg(long, env = "RAWDB_PRESIGN_TTL_SECS", default_value_t = 3600)]
     pub presign_ttl_secs: u64,
 
-    #[arg(long, env = "RAWDB_PENDING_TTL_DAYS", default_value_t = 14)]
-    pub pending_ttl_days: u64,
-
     /// Per-instance, per-IP download rate limit: max distinct sample-file
     /// downloads one client IP may start within
     /// `RAWDB_DOWNLOAD_RATE_WINDOW_SECS`. This is a second tier behind any

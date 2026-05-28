@@ -17,7 +17,6 @@ data:
   # presigned (default) | stream | either (client opts in via ?stream=1)
   RAWDB_DOWNLOAD_MODE: "presigned"
   RAWDB_PRESIGN_TTL_SECS: "3600"
-  RAWDB_PENDING_TTL_DAYS: "14"
   RAWDB_SESSION_TTL_SECS: "86400"
   # Denylist of extensions that may NOT be uploaded (everything else is
   # allowed — RAW formats are too numerous to allowlist). Matches the

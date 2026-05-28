@@ -40,7 +40,6 @@ config:
   uploadMode: either        # presigned | stream | either
   downloadMode: presigned   # presigned | stream | either
   presignTtlSecs: 21600
-  pendingTtlDays: 14
   # Hard ceiling on a single uploaded file. Enforced server-side and
   # surfaced via /api/stats so the upload form refuses oversized files
   # before the PUT. Default 2 GiB.
