@@ -298,8 +298,12 @@ traefik:
       # Per-service weight; omitted from the rendered spec when 0/empty.
       weight: 1
       sticky:
-        # Whether to emit `spec.weighted.sticky` on the TraefikService.
-        # Disable to get a plain weighted LB with no affinity at all.
+        # Whether to emit sticky-cookie config on the TraefikService.
+        # Rendered at `spec.weighted.services[0].sticky` (per-pod
+        # affinity), not at `spec.weighted.sticky` (which would pin
+        # the cookie to a service entry and is a no-op when there's
+        # only one entry, as here). Disable to get a plain weighted
+        # LB with no affinity at all.
         enabled: true
         cookie:
           # Empty = let Traefik pick a default name. Set to something

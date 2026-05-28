@@ -12,27 +12,32 @@ spec:
         {{- with .Values.traefik.traefikService.weighted.weight }}
         weight: {{ . }}
         {{- end }}
-    {{- with .Values.traefik.traefikService.weighted.sticky }}
-    {{- if .enabled }}
-    sticky:
-      cookie:
-        {{- with .cookie.name }}
-        name: {{ . | quote }}
+        {{- with .Values.traefik.traefikService.weighted.sticky }}
+        {{- if .enabled }}
+        # Sticky is attached to the referenced service entry (not to
+        # `spec.weighted.sticky`) so the cookie pins each browser to a
+        # specific *pod* under this Kubernetes Service, rather than to
+        # this single entry in the weighted bucket (which would be a
+        # no-op with only one entry).
+        sticky:
+          cookie:
+            {{- with .cookie.name }}
+            name: {{ . | quote }}
+            {{- end }}
+            secure: {{ .cookie.secure }}
+            httpOnly: {{ .cookie.httpOnly }}
+            {{- with .cookie.sameSite }}
+            sameSite: {{ . }}
+            {{- end }}
+            {{- if gt (int .cookie.maxAge) 0 }}
+            maxAge: {{ .cookie.maxAge }}
+            {{- end }}
+            {{- with .cookie.path }}
+            path: {{ . | quote }}
+            {{- end }}
+            {{- with .cookie.domain }}
+            domain: {{ . | quote }}
+            {{- end }}
         {{- end }}
-        secure: {{ .cookie.secure }}
-        httpOnly: {{ .cookie.httpOnly }}
-        {{- with .cookie.sameSite }}
-        sameSite: {{ . }}
         {{- end }}
-        {{- if gt (int .cookie.maxAge) 0 }}
-        maxAge: {{ .cookie.maxAge }}
-        {{- end }}
-        {{- with .cookie.path }}
-        path: {{ . | quote }}
-        {{- end }}
-        {{- with .cookie.domain }}
-        domain: {{ . | quote }}
-        {{- end }}
-    {{- end }}
-    {{- end }}
 {{- end }}
