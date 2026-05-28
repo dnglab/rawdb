@@ -24,6 +24,7 @@ use tokio::time::Instant;
 
 use crate::cache::db::{Db, FileSizeInfo, UserRow};
 use crate::config::Config;
+use crate::events::RawdbEvents;
 use crate::meta::{self, RawdbMeta};
 use crate::s3::S3;
 use crate::state::{AppMetrics, AppState};
@@ -40,16 +41,24 @@ pub struct Scanner {
     concurrency: usize,
     interval: Duration,
     metrics: Arc<AppMetrics>,
+    events: RawdbEvents,
 }
 
 impl Scanner {
-    pub fn new(db: Db, s3: S3, cfg: &Config, metrics: Arc<AppMetrics>) -> Self {
+    pub fn new(
+        db: Db,
+        s3: S3,
+        cfg: &Config,
+        metrics: Arc<AppMetrics>,
+        events: RawdbEvents,
+    ) -> Self {
         Self {
             db,
             s3,
             concurrency: cfg.scan_concurrency.max(1),
             interval: Duration::from_secs(cfg.rescan_secs.max(1)),
             metrics,
+            events,
         }
     }
 
@@ -82,6 +91,7 @@ impl Scanner {
                     Err(e) => {
                         tracing::error!(error = ?e, "scan failed");
                         self.record_error("run_once");
+                        self.events.scan_error("run_once", &format!("{e:#}"));
                     }
                 }
             }
@@ -166,10 +176,12 @@ impl Scanner {
                 Ok(Err(e)) => {
                     tracing::warn!(error = ?e, "scan_one_set failed");
                     self.record_error("scan_one_set");
+                    self.events.scan_error("scan_one_set", &format!("{e:#}"));
                 }
                 Err(e) => {
                     tracing::warn!(error = ?e, "scan_one_set join failed");
                     self.record_error("scan_one_set");
+                    self.events.scan_error("scan_one_set", &format!("{e:#}"));
                 }
             }
         }
@@ -222,10 +234,12 @@ impl Scanner {
                 Ok(Err(e)) => {
                     tracing::warn!(error = ?e, "scan_one_pending failed");
                     self.record_error("scan_one_pending");
+                    self.events.scan_error("scan_one_pending", &format!("{e:#}"));
                 }
                 Err(e) => {
                     tracing::warn!(error = ?e, "scan_one_pending join failed");
                     self.record_error("scan_one_pending");
+                    self.events.scan_error("scan_one_pending", &format!("{e:#}"));
                 }
             }
         }

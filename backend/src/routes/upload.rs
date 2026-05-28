@@ -405,6 +405,7 @@ pub async fn stream(
 )]
 pub async fn complete(
     State(state): State<AppState>,
+    sess: crate::auth::OptionalSession,
     Json(req): Json<CompleteRequest>,
 ) -> AppResult<StatusCode> {
     if req.maker.trim().is_empty() || req.model.trim().is_empty() {
@@ -496,6 +497,16 @@ pub async fn complete(
             tracing::warn!(error = ?e, "post-complete refresh failed");
         }
     });
+
+    // K8s event: who uploaded what. Anonymous when no session is
+    // present (the upload routes don't require auth at the transport
+    // layer; the frontend gates the UI).
+    let by = sess
+        .0
+        .as_ref()
+        .map(|s| s.sub.as_str())
+        .unwrap_or("anonymous");
+    state.events.upload_created(&req.maker, &req.model, by);
 
     Ok(StatusCode::CREATED)
 }

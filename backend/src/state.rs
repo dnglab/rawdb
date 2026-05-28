@@ -11,6 +11,7 @@ use crate::auth_oidc::OidcClient;
 use crate::cache::db::Db;
 use crate::cache::scanner::Scanner;
 use crate::config::Config;
+use crate::events::RawdbEvents;
 use crate::ratelimit::DownloadRateLimiter;
 use crate::s3::S3;
 
@@ -30,6 +31,8 @@ pub struct AppState {
     pub metrics: Arc<AppMetrics>,
     /// Per-instance, per-IP download rate limiter.
     pub downloads: Arc<DownloadRateLimiter>,
+    /// Best-effort Kubernetes Event publisher. No-op outside a cluster.
+    pub events: RawdbEvents,
 }
 
 impl AppState {

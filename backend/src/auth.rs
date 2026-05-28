@@ -148,6 +148,27 @@ pub fn clear_cookie_header() -> HeaderValue {
 /// missing or invalid.
 pub struct SessionExtractor(pub Session);
 
+/// Like [`SessionExtractor`] but never rejects — `None` when the cookie
+/// is absent or the JWT is invalid/expired. Useful on endpoints that
+/// accept both authenticated and anonymous callers but want to *record*
+/// who the caller was when one is present (e.g. emitting events that
+/// name the uploader on success but still allow public uploads).
+pub struct OptionalSession(pub Option<Session>);
+
+#[async_trait]
+impl FromRequestParts<AppState> for OptionalSession {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let session = extract_cookie(parts, SESSION_COOKIE)
+            .and_then(|token| decode_session(&state.config, &token));
+        Ok(OptionalSession(session))
+    }
+}
+
 #[async_trait]
 impl FromRequestParts<AppState> for SessionExtractor {
     type Rejection = Response;

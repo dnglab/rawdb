@@ -143,9 +143,25 @@ secret:
 serviceAccount:
   create: true
   name: ""
-  # rawdb does not call the Kubernetes API; no token needed in the pod.
+  # rawdb's main paths don't call the Kubernetes API; when `events.enabled`
+  # is true the Deployment forces the token to be mounted regardless of
+  # this default (see `events` below for the API-call surface).
   automountServiceAccountToken: false
   annotations: {}
+
+# ---------------------------------------------------------------------------
+# Kubernetes Events
+# ---------------------------------------------------------------------------
+# When enabled, rawdb publishes business events (SetApproved,
+# UploadCreated, ScanError) via the Kubernetes API so operators can
+# `kubectl get events --field-selector involvedObject.name=<pod>`. The
+# chart renders a namespace Role granting `create/patch` on events plus
+# a RoleBinding to the chart's ServiceAccount, and the Deployment
+# overrides `serviceAccount.automountServiceAccountToken` to true so the
+# token is available to the binary. Outside Kubernetes (POD_NAME /
+# POD_NAMESPACE missing) the recorder no-ops.
+events:
+  enabled: true
 
 # ---------------------------------------------------------------------------
 # Pod / container metadata + security

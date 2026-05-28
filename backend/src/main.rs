@@ -13,6 +13,7 @@ mod auth_oidc;
 mod cache;
 mod config;
 mod error;
+mod events;
 mod meta;
 mod openapi;
 mod ratelimit;
@@ -59,7 +60,16 @@ async fn main() -> Result<()> {
     let db = Db::open(&config.cache_dir)?;
     let s3 = S3::from_config(&config).await?;
     let metrics = Arc::new(AppMetrics::new());
-    let scanner = Scanner::new(db.clone(), s3.clone(), &config, metrics.clone());
+    // Initialize the k8s Event recorder before the scanner so the
+    // scanner can emit ScanError events; outside a cluster this no-ops.
+    let events = events::RawdbEvents::init().await;
+    let scanner = Scanner::new(
+        db.clone(),
+        s3.clone(),
+        &config,
+        metrics.clone(),
+        events.clone(),
+    );
     let oidc = auth_oidc::OidcClient::from_config(&config).await?;
     let github = auth_github::GithubClient::from_config(&config)?;
 
@@ -93,6 +103,7 @@ async fn main() -> Result<()> {
         ready: ready_rx,
         metrics,
         downloads,
+        events,
     };
 
     let app = routes::build_router(state.clone());

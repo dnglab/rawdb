@@ -666,7 +666,7 @@ pub struct ApproveRequest {
     ),
 )]
 pub async fn approve_pending(
-    _auth: AuthGuard<REVIEWER_OR_ADMIN>,
+    auth: AuthGuard<REVIEWER_OR_ADMIN>,
     State(state): State<AppState>,
     Path(upload_id): Path<String>,
     Json(req): Json<ApproveRequest>,
@@ -841,6 +841,9 @@ pub async fn approve_pending(
             tracing::warn!(error = ?e, "approve: refresh_one_pending failed");
         }
     });
+
+    // K8s event: which reviewer approved which set.
+    state.events.set_approved(&maker, &model, &auth.0.sub);
 
     Ok(StatusCode::OK)
 }
