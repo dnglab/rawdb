@@ -141,7 +141,7 @@ onMounted(load);
               ><Checkbox v-model="newRoles" value="reviewer" /> reviewer</label
             >
             <label
-              ><Checkbox v-model="newRoles" value="unlimited" /> unlimited</label
+              ><Checkbox v-model="newRoles" value="apiservice" /> apiservice</label
             >
           </div>
           <Button type="submit" label="Add" icon="pi pi-user-plus" />
@@ -181,11 +181,11 @@ onMounted(load);
                   </label>
                   <label>
                     <Checkbox
-                      :model-value="data.roles.includes('unlimited')"
+                      :model-value="data.roles.includes('apiservice')"
                       binary
-                      @update:model-value="toggleRole(data, 'unlimited')"
+                      @update:model-value="toggleRole(data, 'apiservice')"
                     />
-                    unlimited
+                    apiservice
                   </label>
                 </div>
               </template>

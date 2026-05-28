@@ -1,5 +1,5 @@
 //! Self-service endpoints for the logged-in user. Currently: personal
-//! API-key management. Only `unlimited`-role users may hold a key; one
+//! API-key management. Only `apiservice`-role users may hold a key; one
 //! key per user (regenerating replaces the old one).
 
 use axum::extract::State;
@@ -9,7 +9,7 @@ use axum::{Json, Router};
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::apikey::{self, ROLE_UNLIMITED};
+use crate::apikey::{self, ROLE_APISERVICE};
 use crate::auth::{SessionExtractor, BOOTSTRAP_SUB};
 use crate::error::{AppError, AppResult};
 use crate::routes::admin::map_users_error;
@@ -27,7 +27,7 @@ pub fn router() -> Router<AppState> {
 pub struct ApiKeyStatus {
     /// Whether the caller currently holds an API key.
     pub has_key: bool,
-    /// Whether the caller is allowed to hold one (has the `unlimited` role).
+    /// Whether the caller is allowed to hold one (has the `apiservice` role).
     pub eligible: bool,
 }
 
@@ -65,7 +65,7 @@ pub async fn get_api_key(
     let (has_key, eligible) = match user {
         Some(u) => (
             u.api_key_hash.is_some(),
-            u.roles.iter().any(|r| r == ROLE_UNLIMITED),
+            u.roles.iter().any(|r| r == ROLE_APISERVICE),
         ),
         None => (false, false),
     };
@@ -73,7 +73,7 @@ pub async fn get_api_key(
 }
 
 /// Generate (or regenerate) the caller's API key. Requires the
-/// `unlimited` role — checked live against the users file, not the
+/// `apiservice` role — checked live against the users file, not the
 /// session token. The returned plaintext is shown only here.
 #[utoipa::path(
     post,
@@ -83,7 +83,7 @@ pub async fn get_api_key(
     responses(
         (status = 200, body = ApiKeyCreated),
         (status = 400, description = "Bootstrap admin cannot hold a key"),
-        (status = 403, description = "Caller lacks the `unlimited` role"),
+        (status = 403, description = "Caller lacks the `apiservice` role"),
     ),
 )]
 pub async fn create_api_key(
@@ -100,7 +100,7 @@ pub async fn create_api_key(
         .get_user(&sess.sub)
         .map_err(AppError::Other)?
         .ok_or(AppError::Forbidden)?;
-    if !user.roles.iter().any(|r| r == ROLE_UNLIMITED) {
+    if !user.roles.iter().any(|r| r == ROLE_APISERVICE) {
         return Err(AppError::Forbidden);
     }
 

@@ -178,7 +178,7 @@ async function copyKey() {
             severity="info"
             :closable="false"
           >
-            API keys require the <strong>unlimited</strong> role. Ask an
+            API keys require the <strong>apiservice</strong> role. Ask an
             administrator to grant it.
           </Message>
 

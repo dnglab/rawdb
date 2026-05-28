@@ -481,7 +481,7 @@ pub async fn download(
 ) -> AppResult<Response> {
     // Second-tier, per-instance rate limit on sample downloads. Checked
     // before any DB/S3 work so abuse is rejected cheaply. A valid personal
-    // API key (`X-API-Key`) from an `unlimited`-role user bypasses it.
+    // API key (`X-API-Key`) from an `apiservice`-role user bypasses it.
     // A *lookup error* (DB pool exhausted etc.) is surfaced as 5xx so we
     // never silently downgrade an authenticated request to anonymous.
     let has_api_key = crate::apikey::lookup(&state.db, &headers)

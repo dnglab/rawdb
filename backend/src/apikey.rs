@@ -1,4 +1,4 @@
-//! Personal API keys for `unlimited`-role users.
+//! Personal API keys for `apiservice`-role users.
 //!
 //! A key lets a dedicated user (a) bypass the per-IP download rate limit
 //! and (b) call the key-protected `/api/export` endpoint. Keys are
@@ -19,7 +19,7 @@ use crate::cache::db::{Db, UserRow};
 pub const API_KEY_HEADER: &str = "x-api-key";
 
 /// Role required to own an API key (and, by extension, to use one).
-pub const ROLE_UNLIMITED: &str = "unlimited";
+pub const ROLE_APISERVICE: &str = "apiservice";
 
 /// Human-recognizable prefix on every generated key.
 const KEY_PREFIX: &str = "rawdb_";
@@ -40,7 +40,7 @@ pub fn hash(key: &str) -> String {
 /// Resolve an `X-API-Key` request header to its owning user.
 ///
 /// - `Ok(Some(user))` — header present, key matches a non-blocked
-///   `unlimited`-role user.
+///   `apiservice`-role user.
 /// - `Ok(None)` — header absent, malformed, or doesn't authorize
 ///   anything (no matching user / blocked / wrong role).
 /// - `Err(_)` — the lookup itself failed (DB pool exhausted, SQLite
@@ -51,7 +51,7 @@ pub fn hash(key: &str) -> String {
 ///   rate-limit bypass contract.
 ///
 /// The check is intentionally re-evaluated live against the cache: a
-/// user who is blocked or who has lost the `unlimited` role no longer
+/// user who is blocked or who has lost the `apiservice` role no longer
 /// passes, even though their key string is unchanged.
 pub fn lookup(db: &Db, headers: &HeaderMap) -> anyhow::Result<Option<UserRow>> {
     let Some(raw) = headers
@@ -70,7 +70,7 @@ pub fn lookup(db: &Db, headers: &HeaderMap) -> anyhow::Result<Option<UserRow>> {
     if user.blocked {
         return Ok(None);
     }
-    if !user.roles.iter().any(|r| r == ROLE_UNLIMITED) {
+    if !user.roles.iter().any(|r| r == ROLE_APISERVICE) {
         return Ok(None);
     }
     Ok(Some(user))

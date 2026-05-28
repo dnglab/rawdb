@@ -80,7 +80,7 @@ pub fn build_router(state: AppState) -> Router {
 /// resolved from a valid `X-API-Key` header (the owning user's `sub`)
 /// or `"public"` for anonymous/cookie-authed traffic. Cardinality stays
 /// bounded because API keys are only minted for operator-approved
-/// `unlimited`-role users.
+/// `apiservice`-role users.
 async fn track_http(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let method = req.method().as_str().to_owned();
     // Best-effort label only — if the lookup itself errors (e.g. DB

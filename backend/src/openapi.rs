@@ -23,7 +23,7 @@ impl Modify for SecurityAddon {
             "session_cookie",
             SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new("rawdb_session"))),
         );
-        // Personal API key for `unlimited`-role users — sent in the
+        // Personal API key for `apiservice`-role users — sent in the
         // `X-API-Key` header; bypasses the download rate limit and gates
         // `/api/export`.
         components.add_security_scheme(

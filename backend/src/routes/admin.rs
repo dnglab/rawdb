@@ -1053,9 +1053,9 @@ pub async fn delete_user(
 
 fn validate_roles(roles: &[String]) -> AppResult<()> {
     for r in roles {
-        // `unlimited`: may hold a personal API key (download rate-limit
+        // `apiservice`: may hold a personal API key (download rate-limit
         // bypass + access to /api/export).
-        if !matches!(r.as_str(), "admin" | "reviewer" | "unlimited") {
+        if !matches!(r.as_str(), "admin" | "reviewer" | "apiservice") {
             return Err(AppError::BadRequest(format!("unknown role: {r}")));
         }
     }

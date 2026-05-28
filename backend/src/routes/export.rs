@@ -1,6 +1,6 @@
 //! Bulk export: the whole approved catalogue — every set with all its
 //! files — as one JSON document. Protected by a personal API key
-//! (`X-API-Key`), so only `unlimited`-role users can call it.
+//! (`X-API-Key`), so only `apiservice`-role users can call it.
 
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -84,7 +84,7 @@ impl From<ExportSet> for ExportSetEnvelope {
 }
 
 /// Full catalogue dump. Requires a valid `X-API-Key` belonging to a
-/// non-blocked `unlimited`-role user. Includes non-camera ("special")
+/// non-blocked `apiservice`-role user. Includes non-camera ("special")
 /// sets — the export is for dedicated downstream consumers, not the
 /// public browse UI.
 #[utoipa::path(

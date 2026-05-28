@@ -29,7 +29,7 @@ pub struct User {
     #[serde(default)]
     pub roles: Vec<String>,
     /// SHA-256 (hex) of the user's personal API key, if one has been
-    /// generated. Only `unlimited`-role users may hold one. The plaintext
+    /// generated. Only `apiservice`-role users may hold one. The plaintext
     /// key is shown to the user exactly once at generation time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_hash: Option<String>,
