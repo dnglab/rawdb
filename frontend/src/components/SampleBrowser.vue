@@ -231,4 +231,12 @@ function openSet(s: SetSummary) {
 :deep(.p-datatable-tbody > tr) {
   cursor: pointer;
 }
+/* PrimeVue's Aura theme tints the sorted column blue across header and
+   body. The sort-direction icon already conveys which column is active,
+   so we drop the background. */
+:deep(.p-datatable-thead) th.p-datatable-column-sorted,
+:deep(.p-datatable-tbody) td.p-datatable-column-sorted {
+  background: transparent;
+  color: inherit;
+}
 </style>
