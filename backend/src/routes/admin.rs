@@ -688,10 +688,25 @@ pub async fn approve_pending(
     })?;
     let toml = String::from_utf8(bytes)
         .map_err(|e| AppError::BadRequest(format!("meta not UTF-8: {e}")))?;
-    let parsed = meta::parse(&toml)
+    let mut parsed = meta::parse(&toml)
         .map_err(|e| AppError::BadRequest(format!("invalid meta: {e}")))?;
     let maker = parsed.set.maker.clone();
     let model = parsed.set.model.clone();
+
+    // Pin `uploaded_at` to the original upload time before we write a new
+    // approved meta. The scanner's fallback uses the meta object's S3
+    // `LastModified`, which is fine for the pending row (that file *was*
+    // written at upload time), but the approved meta we're about to put
+    // below carries `Some(now)`-equivalent semantics. Resolving it here
+    // makes the timestamp survive the round-trip: if the uploader set
+    // it explicitly we keep their value; otherwise we copy the pending
+    // meta's `LastModified` — the same source the scanner used to fill
+    // the pending row.
+    if parsed.set.uploaded_at.is_none() {
+        if let Some(head) = state.s3.head(&meta_key).await.map_err(AppError::Other)? {
+            parsed.set.uploaded_at = head.last_modified;
+        }
+    }
 
     // Selected subset: explicit list, else all declared files.
     let selected: std::collections::HashSet<String> = if req.files.is_empty() {
@@ -718,6 +733,11 @@ pub async fn approve_pending(
         .get_set(&maker, &model)
         .map_err(AppError::Other)?
         .is_some();
+    // In merge mode, we need to fold the existing approved files into the
+    // new meta — the S3 copy below only overwrites files at colliding
+    // paths; everything else stays in the bucket but would vanish from
+    // the catalog if we wrote a meta containing only the promoted files.
+    let mut existing_files: Vec<crate::meta::FileMeta> = Vec::new();
     if already_exists {
         match conflict_mode {
             "refuse" => {
@@ -732,20 +752,64 @@ pub async fn approve_pending(
                     .await
                     .map_err(AppError::Other)?;
             }
-            _ => {} // merge: overwrite per file
+            "merge" => {
+                // Pull the current approved meta so we can preserve its file
+                // entries. Treat a missing/unreadable meta as a hard error
+                // rather than silently dropping the existing files — that
+                // is exactly the bug this branch is here to prevent.
+                let approved_meta_key = format!("{samples_prefix}rawdb-meta.toml");
+                let (bytes, _) = state.s3.get_bytes(&approved_meta_key).await.map_err(|e| match e {
+                    S3Error::NotFound(_) | S3Error::PreconditionFailed => AppError::Other(
+                        anyhow::anyhow!(
+                            "merge requested but existing meta {approved_meta_key} is missing"
+                        ),
+                    ),
+                    S3Error::Other(e) => AppError::Other(e),
+                })?;
+                let toml = String::from_utf8(bytes).map_err(|e| {
+                    AppError::Other(anyhow::anyhow!(
+                        "existing approved meta not UTF-8: {e}"
+                    ))
+                })?;
+                let existing = meta::parse(&toml).map_err(|e| {
+                    AppError::Other(anyhow::anyhow!(
+                        "invalid existing approved meta: {e}"
+                    ))
+                })?;
+                existing_files = existing.files;
+            }
+            _ => unreachable!("conflict_mode validated above"),
         }
     }
 
-    // Copy only the selected files.
-    for f in &promote {
+    // Copy the selected files in parallel. CopyObject is server-side on
+    // S3/Garage but still moves real bytes, so a 12 GB set previously
+    // took minutes when issued one file at a time. `try_join_all`
+    // fans them out concurrently and short-circuits on the first error.
+    let copies = promote.iter().map(|f| {
+        let s3 = state.s3.clone();
         let src = format!("{pending_prefix}{}", f.path);
         let dst = format!("{samples_prefix}{}", f.path);
-        state.s3.copy(&src, &dst).await.map_err(AppError::Other)?;
-    }
-    // Write a meta listing only the promoted files.
+        async move { s3.copy(&src, &dst).await }
+    });
+    futures::future::try_join_all(copies)
+        .await
+        .map_err(AppError::Other)?;
+    // Merge promoted files into the existing list: paths in `promote` win
+    // on collision (the reviewer's intent is that this upload replaces
+    // any prior version of those specific files), and paths only in
+    // `existing_files` are preserved unchanged. For non-merge modes
+    // `existing_files` is empty, so the result is just the promoted set.
+    let promoted_paths: std::collections::HashSet<&str> =
+        promote.iter().map(|f| f.path.as_str()).collect();
+    let mut merged_files: Vec<crate::meta::FileMeta> = existing_files
+        .into_iter()
+        .filter(|f| !promoted_paths.contains(f.path.as_str()))
+        .collect();
+    merged_files.extend(promote.iter().map(|f| (*f).clone()));
     let approved_meta = RawdbMeta {
         set: parsed.set.clone(),
-        files: promote.iter().map(|f| (*f).clone()).collect(),
+        files: merged_files,
     };
     state
         .s3
