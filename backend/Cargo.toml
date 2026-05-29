@@ -64,6 +64,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v7"] }
 rand = "0.8"
 url = "2"
+urlencoding = "2"
 thiserror = "1"
 anyhow = "1"
 tracing = "0.1"

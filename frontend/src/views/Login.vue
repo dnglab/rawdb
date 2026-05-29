@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from '../auth';
 
+const route = useRoute();
 const router = useRouter();
 const { refresh } = useAuth();
 
@@ -11,9 +12,32 @@ const githubEnabled = ref(false);
 const passwordEnabled = ref(true);
 const password = ref('');
 const msg = ref<string | null>(null);
+// Friendly explanation rendered when the SSO callback rejected the user
+// (unregistered or blocked). The backend redirects here with
+// `?error=...&sub=...` so we surface the reason and the canonical sub
+// the operator needs to add to users.toml.
+const ssoError = ref<{ severity: 'warn' | 'error'; text: string } | null>(null);
 const busy = ref(false);
 
 onMounted(async () => {
+  const err = typeof route.query.error === 'string' ? route.query.error : null;
+  const sub = typeof route.query.sub === 'string' ? route.query.sub : null;
+  if (err === 'not_registered') {
+    ssoError.value = {
+      severity: 'warn',
+      text: sub
+        ? `Sign-in succeeded but ${sub} isn't a registered user. Ask an administrator to add this identity before trying again.`
+        : `Sign-in succeeded but this identity isn't registered with RawDB. Ask an administrator to add it before trying again.`,
+    };
+  } else if (err === 'blocked') {
+    ssoError.value = {
+      severity: 'error',
+      text: sub
+        ? `Account ${sub} is currently blocked. Contact an administrator.`
+        : `This account is currently blocked. Contact an administrator.`,
+    };
+  }
+
   try {
     const res = await fetch('/auth/methods');
     if (res.ok) {
@@ -58,6 +82,15 @@ async function loginPassword() {
       <template #title>Sign in</template>
       <template #subtitle>Reviewer / admin access</template>
       <template #content>
+        <Message
+          v-if="ssoError"
+          :severity="ssoError.severity"
+          :closable="false"
+          class="mb"
+        >
+          {{ ssoError.text }}
+        </Message>
+
         <form
           v-if="passwordEnabled"
           class="form"
@@ -135,5 +168,8 @@ async function loginPassword() {
 }
 .mt {
   margin-top: 1rem;
+}
+.mb {
+  margin-bottom: 1rem;
 }
 </style>

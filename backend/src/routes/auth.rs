@@ -340,13 +340,11 @@ pub async fn oidc_callback_stub(
     // Look up the user in the cache (which mirrors users.toml).
     let user = match state.db.get_user(&canonical_sub) {
         Ok(Some(u)) => u,
-        Ok(None) => {
-            return AppError::Forbidden.into_response();
-        }
+        Ok(None) => return reject_to_login("not_registered", &canonical_sub, "oidc"),
         Err(e) => return AppError::Other(e).into_response(),
     };
     if user.blocked {
-        return AppError::Forbidden.into_response();
+        return reject_to_login("blocked", &canonical_sub, "oidc");
     }
 
     let token = match encode_session(&state.config, &canonical_sub, OIDC_SOURCE, user.roles) {
@@ -504,11 +502,11 @@ pub async fn github_callback(
 
     let user = match state.db.get_user(&canonical_sub) {
         Ok(Some(u)) => u,
-        Ok(None) => return AppError::Forbidden.into_response(),
+        Ok(None) => return reject_to_login("not_registered", &canonical_sub, "github"),
         Err(e) => return AppError::Other(e).into_response(),
     };
     if user.blocked {
-        return AppError::Forbidden.into_response();
+        return reject_to_login("blocked", &canonical_sub, "github");
     }
 
     let token = match encode_session(&state.config, &canonical_sub, OIDC_SOURCE, user.roles) {
@@ -525,6 +523,31 @@ pub async fn github_callback(
         "rawdb_github_pending=; Path=/auth/github; HttpOnly; SameSite=Lax; Max-Age=0",
     );
     resp.headers_mut().append(header::SET_COOKIE, clear);
+    resp
+}
+
+/// Build a 302 to the SPA's `/login` page carrying a machine-readable
+/// reason (and the canonical sub, useful when asking an admin to add
+/// the account) instead of the raw 403 JSON the user would otherwise
+/// see. Also clears the per-provider pending cookie so a retry starts
+/// from a clean slate.
+fn reject_to_login(reason: &str, sub: &str, provider: &str) -> Response {
+    let location = format!(
+        "/login?error={}&sub={}",
+        urlencoding::encode(reason),
+        urlencoding::encode(sub),
+    );
+    let mut resp = Redirect::temporary(&location).into_response();
+    let clear_path = match provider {
+        "github" => "/auth/github",
+        _ => "/auth/oidc",
+    };
+    let header = format!(
+        "rawdb_{provider}_pending=; Path={clear_path}; HttpOnly; SameSite=Lax; Max-Age=0"
+    );
+    if let Ok(v) = HeaderValue::from_str(&header) {
+        resp.headers_mut().append(header::SET_COOKIE, v);
+    }
     resp
 }
 
