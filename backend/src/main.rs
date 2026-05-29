@@ -35,6 +35,16 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Pin the rustls CryptoProvider before any TLS user runs. Both
+    // aws-lc-rs (via the AWS SDK) and ring end up linked into the binary,
+    // and rustls 0.23 refuses to pick a default at runtime when more than
+    // one is available. Outside K8s this isn't reached because the AWS
+    // SDK is happy with either; inside K8s the kube client is the first
+    // to ask, which is why this surfaced only under Kubernetes.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("install rustls aws-lc-rs provider");
+
     // Subscriber is set up before Config::parse so config-parse errors are
     // still logged. RAWDB_LOG_FORMAT is read directly from env here for the
     // same reason; it's also declared on `Config` so it surfaces in --help.
