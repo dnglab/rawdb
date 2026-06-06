@@ -342,7 +342,11 @@ impl Db {
     /// `tags` table, which holds both set-level rows (`file_path IS NULL`)
     /// and per-file rows, so set tags are effectively inherited by files.
     ///
-    /// `fts` is matched against `sets_fts` (FTS5 over maker/model/notes/tags).
+    /// `fts` is matched against `sets_fts` (FTS5 over maker/model/notes/tags)
+    /// using the `trigram` tokenizer so any ≥3-character substring of an
+    /// indexed field is a hit. Each whitespace-separated token in the
+    /// user input becomes its own AND'd phrase, so "Canon EOS R5"
+    /// matches even when the substring spans maker + model.
     pub fn search_sets(&self, q: &SetQuery) -> Result<SetSearchPage> {
         let conn = self.reader.get()?;
 
@@ -390,8 +394,11 @@ impl Db {
             params.push(Box::new(tag.clone()));
         }
 
-        // FTS join. The user-typed string is sanitized into an FTS5 query so
-        // special characters ($, ", :, …) cannot trigger an FTS5 syntax error.
+        // FTS join. The user-typed string is sanitized into an FTS5
+        // MATCH query so special characters ($, ", :, AND, …) cannot
+        // be interpreted as FTS5 syntax or trigger a syntax error.
+        // With the `trigram` tokenizer each quoted token becomes an
+        // indexed substring lookup; multiple tokens are AND'd.
         let fts_query = q.fts.as_deref().and_then(fts5_sanitize);
         let (fts_join, fts_where) = if let Some(text) = fts_query {
             params.push(Box::new(text));
@@ -442,9 +449,7 @@ impl Db {
              ORDER BY {order_by}
              LIMIT ? OFFSET ?"
         );
-        let total_sql = format!(
-            "SELECT COUNT(*) FROM sets s {fts_join} {where_sql}"
-        );
+        let total_sql = format!("SELECT COUNT(*) FROM sets s {fts_join} {where_sql}");
 
         // Total count (without limit/offset binds).
         let total: i64 = {
@@ -992,23 +997,21 @@ pub struct FileSizeInfo {
     pub etag: Option<String>,
 }
 
-/// Turn a user-typed search string into a safe FTS5 MATCH query.
+/// Turn a user-typed search string into a safe FTS5 MATCH query for
+/// the `trigram`-tokenized `sets_fts` table.
 ///
-/// FTS5 has its own query syntax (`AND`, `OR`, `NOT`, `col:term`, `term*`,
-/// quoted phrases) and trips on stray punctuation such as `$`, `%`, lone
-/// `-`, or unbalanced quotes. To avoid all of that we normalize *every*
-/// non-alphanumeric character to whitespace — which mirrors what FTS5's
-/// own `unicode61` tokenizer does when it builds the index — then split
-/// into tokens and wrap each in double quotes. Tokens are joined with
-/// spaces (FTS5's implicit AND). Returns `None` when nothing usable
-/// remains, so callers can skip the MATCH clause entirely.
+/// Splitting and quoting prevents FTS5 syntax (`AND`, `OR`, `NOT`,
+/// `col:term`, `term*`, unbalanced `"`) from being interpreted as
+/// operators, and gives each user-typed word its own implicit-AND'd
+/// phrase — so "Canon EOS R5" still matches a Canon-maker /
+/// EOS R5-model set because each of `Canon`, `EOS`, `R5` is a
+/// substring of *some* indexed column. Returns `None` when nothing
+/// usable remains so the caller can skip the MATCH clause entirely.
 ///
-/// Why drop `-` rather than keep it: a phrase `"-"` is legal FTS5 syntax,
-/// but FTS5 tokenizes the contents and `-` produces zero tokens, which
-/// then surfaces as `syntax error near ""` — exactly the bug we're
-/// guarding against. Hyphenated input like `high-iso` still matches the
-/// indexed tag because the indexer split it the same way (`high`, `iso`),
-/// and adjacent phrases satisfy the MATCH.
+/// The trigram tokenizer requires each phrase to be at least 3
+/// characters; 1- and 2-character tokens are silently dropped here
+/// rather than handed to FTS5 (which would return zero rows for the
+/// whole query because of the implicit AND).
 fn fts5_sanitize(s: &str) -> Option<String> {
     let normalized: String = s
         .chars()
@@ -1016,6 +1019,7 @@ fn fts5_sanitize(s: &str) -> Option<String> {
         .collect();
     let phrases: Vec<String> = normalized
         .split_whitespace()
+        .filter(|tok| tok.chars().count() >= 3)
         .map(|tok| format!("\"{tok}\""))
         .collect();
     if phrases.is_empty() {
@@ -1179,9 +1183,20 @@ CREATE TABLE IF NOT EXISTS tags (
 CREATE INDEX IF NOT EXISTS tags_lookup ON tags(maker, model, file_path);
 CREATE INDEX IF NOT EXISTS tags_tag    ON tags(tag);
 
+-- Trigram tokenizer indexes every overlapping 3-character substring,
+-- which is what makes "Can" match "Canon" and "EOS" match "EOS R5"
+-- without forcing the user to know the full token. The trade-off is a
+-- 3-character minimum on every query token (shorter MATCH clauses
+-- return zero rows by design); 1- and 2-character model names like
+-- "Z1" are not searchable via this column — operators can fall back
+-- to the explicit `model=` filter for those cases. The sanitizer
+-- below wraps each user token in a quoted phrase so the query is
+-- treated as a substring lookup rather than parsed as FTS5 syntax.
+-- The cache is rebuilt from S3 on pod start (cacheDir is emptyDir),
+-- so swapping the tokenizer needs no migration.
 CREATE VIRTUAL TABLE IF NOT EXISTS sets_fts USING fts5(
     maker, model, notes, tags,
-    tokenize = 'unicode61'
+    tokenize = 'trigram'
 );
 
 CREATE TABLE IF NOT EXISTS pending_sets (
@@ -1308,43 +1323,75 @@ mod tests {
     }
 
     #[test]
-    fn fts_search_tolerates_special_characters() {
+    fn fts_search_trigram_substrings() {
         let dir = TempDir::new().unwrap();
         let db = Db::open(dir.path()).unwrap();
-        db.upsert_set(&sample_meta(), Some("e1"), &[]).unwrap();
+        db.upsert_set(&sample_meta(), Some("e1"), &[]).unwrap(); // Canon / EOS R5, tag high-iso
 
-        // Bare punctuation used to bubble up as `fts5: syntax error near "$"`
-        // (or `near ""` for lone `-`, because FTS5's tokenizer eats it).
-        for s in [
-            "$", "%", "-", "--", "\"", ":", "AND", "foo($)bar", "-foo-", "  ",
-            "foo-", "foo%", "foo$", // exact inputs reported as still failing
-        ] {
+        // ≥3-character substrings match — that's what the trigram
+        // tokenizer + quoted-phrase sanitizer buys us over the previous
+        // unicode61 setup (which required whole tokens).
+        for q in ["Can", "ano", "non", "EOS", "high", "iso", "Canon"] {
             let r = db
-                .search_sets(&SetQuery { fts: Some(s.into()), ..Default::default() })
-                .unwrap_or_else(|e| panic!("fts={s:?} failed: {e}"));
-            // We only care that it didn't error — the result count is
-            // incidental and depends on what we choose to keep after sanitization.
-            let _ = r;
+                .search_sets(&SetQuery { fts: Some(q.into()), ..Default::default() })
+                .unwrap();
+            assert_eq!(r.total, 1, "fts={q:?} should hit one set");
         }
 
-        // A real token still matches the indexed set.
-        let hit = db
-            .search_sets(&SetQuery { fts: Some("Canon".into()), ..Default::default() })
-            .unwrap();
-        assert_eq!(hit.total, 1);
+        // Multi-token queries AND across fields: every token (each ≥3
+        // chars) must hit *some* field. "Canon EOS R5" matches even
+        // though the phrase straddles maker + model.
+        for q in ["Canon EOS R5", "Canon EOS", "EOS Canon", "Canon iso"] {
+            let r = db
+                .search_sets(&SetQuery { fts: Some(q.into()), ..Default::default() })
+                .unwrap();
+            assert_eq!(r.total, 1, "multi-token fts={q:?} should hit");
+        }
+
+        // If *any* ≥3-char token misses, AND semantics drop the row.
+        for q in ["Canon Nikon", "EOS notpresent"] {
+            let r = db
+                .search_sets(&SetQuery { fts: Some(q.into()), ..Default::default() })
+                .unwrap();
+            assert_eq!(r.total, 0, "multi-token fts={q:?} should miss");
+        }
+
+        // Tokens shorter than 3 chars are dropped before reaching FTS5
+        // (the trigram tokenizer would otherwise return zero rows for
+        // the whole query). A query made *entirely* of <3-char tokens
+        // therefore behaves as if `fts` was unset → returns everything.
+        for q in ["C", "Ca", "Z1", "R5"] {
+            let r = db
+                .search_sets(&SetQuery { fts: Some(q.into()), ..Default::default() })
+                .unwrap();
+            assert_eq!(r.total, 1, "fts={q:?} drops to no-op, returns all");
+        }
+
+        // Bare punctuation / FTS5 reserved words must never bubble up
+        // as `fts5: syntax error near ...`. The sanitizer normalises
+        // them out before any MATCH is emitted.
+        for q in ["$", "%", "-", "--", "\"", ":", "AND", "foo($)bar", "-foo-", "  "] {
+            let r = db
+                .search_sets(&SetQuery { fts: Some(q.into()), ..Default::default() })
+                .unwrap_or_else(|e| panic!("fts={q:?} errored: {e}"));
+            let _ = r;
+        }
     }
 
     #[test]
-    fn fts5_sanitize_strips_unsafe_punctuation() {
-        // Every kind of bare punctuation / structural char must yield None.
+    fn fts5_sanitize_drops_short_tokens_and_punctuation() {
+        // Bare punctuation / structural chars → None.
         for empty in ["$", "%", "-", "--", "\"", ":", "()", "   ", ""] {
             assert_eq!(fts5_sanitize(empty), None, "input {empty:?} should drop to None");
         }
+        // <3-char tokens are dropped (trigram tokenizer floor).
+        assert_eq!(fts5_sanitize("Z1"), None);
+        assert_eq!(fts5_sanitize("R5"), None);
+        // ≥3-char tokens survive, wrapped in quotes for FTS5 phrase syntax.
         assert_eq!(fts5_sanitize("Canon"), Some("\"Canon\"".into()));
-        assert_eq!(fts5_sanitize("EOS R5"), Some("\"EOS\" \"R5\"".into()));
-        // Hyphens split tokens (matching FTS5's own indexer behavior).
+        assert_eq!(fts5_sanitize("Canon EOS R5"), Some("\"Canon\" \"EOS\"".into())); // R5 dropped
+        // Hyphens split tokens (every non-alphanumeric becomes whitespace).
         assert_eq!(fts5_sanitize("high-iso"), Some("\"high\" \"iso\"".into()));
-        // Punctuation in the middle of a token also splits.
         assert_eq!(fts5_sanitize("foo$bar"), Some("\"foo\" \"bar\"".into()));
     }
 
