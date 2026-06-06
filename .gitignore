@@ -7,6 +7,10 @@ node_modules/
 dist/
 .vite/
 *.local
+# Stray vue-tsc declaration-emit artifacts that sit next to the .vue
+# sources — nothing imports them, but they shadow stale role/string
+# values when present and have caused real bugs (see admin role rename).
+frontend/src/**/*.vue.js
 
 # Yarn 4 (node-modules linker): keep yarn.lock + .yarnrc.yml, drop the rest
 .yarn/*
