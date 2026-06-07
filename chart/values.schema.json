@@ -55,6 +55,7 @@
         "cacheDir": { "type": "string", "minLength": 1 },
         "rescanSecs": { "type": "integer", "minimum": 1 },
         "scanConcurrency": { "type": "integer", "minimum": 1 },
+        "syncPollSecs": { "type": "integer", "minimum": 1 },
         "uploadMode": { "type": "string", "enum": ["presigned", "stream", "either"] },
         "downloadMode": { "type": "string", "enum": ["presigned", "stream", "either"] },
         "presignTtlSecs": { "type": "integer", "minimum": 1 },

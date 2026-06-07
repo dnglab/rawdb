@@ -581,6 +581,12 @@ pub async fn edit_set(
         .map_err(|e| AppError::Other(anyhow::anyhow!("write meta: {e}")))?;
 
     let _ = state.scanner.refresh_one_set(&maker, &model).await;
+    crate::sync_tick::bump(
+        &state,
+        &[crate::sync_tick::Domain::Sets],
+        "edit_set",
+    )
+    .await;
     Ok(StatusCode::OK)
 }
 
@@ -632,6 +638,12 @@ pub async fn delete_set(
             tracing::warn!(error = ?e, "delete_set: refresh failed");
         }
     });
+    crate::sync_tick::bump(
+        &state,
+        &[crate::sync_tick::Domain::Sets],
+        "delete_set",
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -845,6 +857,12 @@ pub async fn approve_pending(
     // K8s event: which reviewer approved which set.
     state.events.set_approved(&maker, &model, &auth.0.sub);
 
+    crate::sync_tick::bump(
+        &state,
+        &[crate::sync_tick::Domain::Pending, crate::sync_tick::Domain::Sets],
+        "approve_pending",
+    )
+    .await;
     Ok(StatusCode::OK)
 }
 
@@ -942,7 +960,7 @@ pub async fn add_user(
     let sub = req.sub.clone();
     let roles = req.roles.clone();
 
-    let file = cas_update(&state.s3, &state.db, move |f| {
+    let file = cas_update(&state, move |f| {
         if f.users.iter().any(|u| u.sub == sub) {
             return Err(UsersError::Other(anyhow::anyhow!(
                 "user {sub} already exists"
@@ -996,7 +1014,7 @@ pub async fn patch_user(
         validate_roles(roles)?;
     }
     let target = sub.clone();
-    let file = cas_update(&state.s3, &state.db, move |f| {
+    let file = cas_update(&state, move |f| {
         let Some(u) = f.users.iter_mut().find(|u| u.sub == target) else {
             return Err(UsersError::NotFound(target.clone()));
         };
@@ -1041,7 +1059,7 @@ pub async fn delete_user(
     Path(sub): Path<String>,
 ) -> AppResult<StatusCode> {
     let target = sub.clone();
-    cas_update(&state.s3, &state.db, move |f| {
+    cas_update(&state, move |f| {
         let before = f.users.len();
         f.users.retain(|u| u.sub != target);
         if f.users.len() == before {
@@ -1108,6 +1126,12 @@ pub async fn reject_pending(
             tracing::warn!(error = ?e, "reject: refresh failed");
         }
     });
+    crate::sync_tick::bump(
+        &state,
+        &[crate::sync_tick::Domain::Pending],
+        "reject_pending",
+    )
+    .await;
     Ok(StatusCode::OK)
 }
 

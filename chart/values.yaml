@@ -37,6 +37,11 @@ config:
   cacheDir: /tmp/rawdb-cache
   rescanSecs: 300
   scanConcurrency: 16
+  # Poll interval (seconds) for the per-domain S3 "sync tick" objects
+  # that signal cross-pod resync (_system/sync/{users,sets,pending}.tick).
+  # On an ETag change the matching scanner pass runs in the background;
+  # the periodic rescanSecs full scan still runs as belt-and-braces.
+  syncPollSecs: 5
   uploadMode: either        # presigned | stream | either
   downloadMode: presigned   # presigned | stream | either
   presignTtlSecs: 21600

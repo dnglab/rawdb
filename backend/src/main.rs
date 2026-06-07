@@ -20,6 +20,7 @@ mod ratelimit;
 mod routes;
 mod s3;
 mod state;
+mod sync_tick;
 mod users;
 
 use cache::db::Db;
@@ -86,6 +87,7 @@ async fn main() -> Result<()> {
     // Readiness flips to true after the first successful full scan.
     let (ready_tx, ready_rx) = watch::channel(false);
     scanner.clone().spawn(ready_tx);
+    // Wrap once for everything below (state + the sync-tick watcher).
 
     let downloads = Arc::new(ratelimit::DownloadRateLimiter::new(
         config.download_rate_limit,
@@ -103,17 +105,31 @@ async fn main() -> Result<()> {
         });
     }
 
+    let sync_ticks = Arc::new(sync_tick::TickState::new());
+    let scanner = Arc::new(scanner);
+
+    // Cross-pod resync watcher. Polls `_system/sync/{users,sets,pending}.tick`
+    // every RAWDB_SYNC_POLL_SECS and runs only the matching scanner
+    // pass on a change. Doesn't touch readiness — see sync_tick.rs.
+    sync_tick::spawn_watcher(
+        s3.clone(),
+        scanner.clone(),
+        sync_ticks.clone(),
+        std::time::Duration::from_secs(config.sync_poll_secs.max(1)),
+    );
+
     let state = AppState {
         config: Arc::new(config),
         db,
         s3,
-        scanner: Arc::new(scanner),
+        scanner,
         oidc: oidc.map(Arc::new),
         github: github.map(Arc::new),
         ready: ready_rx,
         metrics,
         downloads,
         events,
+        sync_ticks,
     };
 
     let app = routes::build_router(state.clone());

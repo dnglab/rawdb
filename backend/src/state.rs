@@ -14,6 +14,7 @@ use crate::config::Config;
 use crate::events::RawdbEvents;
 use crate::ratelimit::DownloadRateLimiter;
 use crate::s3::S3;
+use crate::sync_tick::TickState;
 
 /// Shared state passed to every handler.
 #[derive(Clone)]
@@ -33,6 +34,10 @@ pub struct AppState {
     pub downloads: Arc<DownloadRateLimiter>,
     /// Best-effort Kubernetes Event publisher. No-op outside a cluster.
     pub events: RawdbEvents,
+    /// Per-domain "last-seen tick ETag" cells, shared between
+    /// [`crate::sync_tick::bump`] (writer) and the watcher loop
+    /// (reader). See [`crate::sync_tick`].
+    pub sync_ticks: Arc<TickState>,
 }
 
 impl AppState {

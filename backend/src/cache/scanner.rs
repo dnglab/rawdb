@@ -136,6 +136,35 @@ impl Scanner {
         Ok(summary)
     }
 
+    // ---- Individual-pass entry points ------------------------------------
+    //
+    // Used by the [`crate::sync_tick`] watcher to run *only* the
+    // domain(s) whose tick changed. Each method is a thin wrapper that
+    // constructs the per-call `Semaphore` so the watcher doesn't have to
+    // know about scanner internals. Errors are propagated to the
+    // watcher, which logs them; metrics are still recorded the same way
+    // via `record_error()` should the caller want to.
+
+    /// Run only the approved-samples pass.
+    pub async fn run_samples_pass(&self) -> Result<()> {
+        let sem = Arc::new(Semaphore::new(self.concurrency));
+        self.scan_samples(sem).await?;
+        Ok(())
+    }
+
+    /// Run only the pending-uploads pass.
+    pub async fn run_pending_pass(&self) -> Result<()> {
+        let sem = Arc::new(Semaphore::new(self.concurrency));
+        self.scan_pending(sem).await?;
+        Ok(())
+    }
+
+    /// Run only the users-file pass.
+    pub async fn run_users_pass(&self) -> Result<()> {
+        let _ = self.scan_users().await?;
+        Ok(())
+    }
+
     // ---- Pass A: approved sets --------------------------------------------
 
     async fn scan_samples(&self, sem: Arc<Semaphore>) -> Result<PassResult> {

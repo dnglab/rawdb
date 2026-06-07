@@ -9,8 +9,10 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::cache::db::{Db, UserRow};
+use crate::cache::db::UserRow;
 use crate::s3::{S3Error, S3};
+use crate::state::AppState;
+use crate::sync_tick::{self, Domain};
 
 pub const USERS_KEY: &str = "_system/users.toml";
 const MAX_CAS_RETRIES: usize = 5;
@@ -54,10 +56,16 @@ pub enum UsersError {
 /// Apply `mutate` to the current users file. Reads, calls the mutator with
 /// a `&mut UsersFile`, then writes back with `If-Match` against the original
 /// ETag. Retries on precondition failure up to `MAX_CAS_RETRIES` times.
-pub async fn cas_update<F>(s3: &S3, db: &Db, mut mutate: F) -> Result<UsersFile, UsersError>
+///
+/// On a successful write, bumps the `Users` sync-tick so peer pods pick
+/// up the change within `RAWDB_SYNC_POLL_SECS` instead of waiting for
+/// the next periodic full scan.
+pub async fn cas_update<F>(state: &AppState, mut mutate: F) -> Result<UsersFile, UsersError>
 where
     F: FnMut(&mut UsersFile) -> Result<(), UsersError>,
 {
+    let s3 = &state.s3;
+    let db = &state.db;
     for _ in 0..MAX_CAS_RETRIES {
         let (current, current_etag) = read_with_etag(s3).await?;
         let mut next = current.clone();
@@ -103,6 +111,7 @@ where
                 db.replace_users(Some(&new_etag), &rows).map_err(|e| {
                     UsersError::Other(anyhow::anyhow!("replace_users cache update: {e}"))
                 })?;
+                sync_tick::bump(state, &[Domain::Users], "users_cas_update").await;
                 return Ok(next);
             }
             Err(S3Error::PreconditionFailed) => continue,

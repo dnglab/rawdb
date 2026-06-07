@@ -319,7 +319,7 @@ pub async fn oidc_callback_stub(
         // If users.toml is empty, auto-add this user as admin.
         let bootstrap_sub = canonical_sub.clone();
         let display = identity.name.clone();
-        let _ = cas_update(&state.s3, &state.db, move |f| {
+        let _ = cas_update(&state, move |f| {
             if f.users.iter().any(|u| u.sub == bootstrap_sub) {
                 return Ok(());
             }
@@ -482,7 +482,7 @@ pub async fn github_callback(
     if state.config.github_initial_admin_sub.as_deref() == Some(&canonical_sub) {
         let bootstrap_sub = canonical_sub.clone();
         let display = identity.name.clone().or_else(|| Some(identity.login.clone()));
-        let _ = cas_update(&state.s3, &state.db, move |f| {
+        let _ = cas_update(&state, move |f| {
             if f.users.iter().any(|u| u.sub == bootstrap_sub) {
                 return Ok(());
             }

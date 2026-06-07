@@ -10,6 +10,7 @@ data:
   RAWDB_CACHE_DIR: {{ .Values.config.cacheDir | quote }}
   RAWDB_RESCAN_SECS: {{ .Values.config.rescanSecs | quote }}
   RAWDB_SCAN_CONCURRENCY: {{ .Values.config.scanConcurrency | quote }}
+  RAWDB_SYNC_POLL_SECS: {{ .Values.config.syncPollSecs | quote }}
   RAWDB_UPLOAD_MODE: {{ .Values.config.uploadMode | quote }}
   RAWDB_DOWNLOAD_MODE: {{ .Values.config.downloadMode | quote }}
   RAWDB_PRESIGN_TTL_SECS: {{ .Values.config.presignTtlSecs | quote }}

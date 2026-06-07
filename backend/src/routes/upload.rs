@@ -508,6 +508,12 @@ pub async fn complete(
         .unwrap_or("anonymous");
     state.events.upload_created(&req.maker, &req.model, by);
 
+    crate::sync_tick::bump(
+        &state,
+        &[crate::sync_tick::Domain::Pending],
+        "upload_complete",
+    )
+    .await;
     Ok(StatusCode::CREATED)
 }
 

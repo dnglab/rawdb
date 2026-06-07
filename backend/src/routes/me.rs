@@ -107,7 +107,7 @@ pub async fn create_api_key(
     let key = apikey::generate();
     let key_hash = apikey::hash(&key);
     let target = sess.sub.clone();
-    cas_update(&state.s3, &state.db, move |f| {
+    cas_update(&state, move |f| {
         match f.users.iter_mut().find(|u| u.sub == target) {
             Some(u) => {
                 u.api_key_hash = Some(key_hash.clone());
@@ -143,7 +143,7 @@ pub async fn delete_api_key(
         ));
     }
     let target = sess.sub.clone();
-    cas_update(&state.s3, &state.db, move |f| {
+    cas_update(&state, move |f| {
         if let Some(u) = f.users.iter_mut().find(|u| u.sub == target) {
             u.api_key_hash = None;
         }

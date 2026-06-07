@@ -59,6 +59,14 @@ pub struct Config {
     #[arg(long, env = "RAWDB_SCAN_CONCURRENCY", default_value_t = 16)]
     pub scan_concurrency: usize,
 
+    /// Poll interval (seconds) for the per-domain S3 "sync tick"
+    /// objects (`_system/sync/{users,sets,pending}.tick`). On an ETag
+    /// change the matching scanner pass runs in the background; the
+    /// belt-and-braces full periodic scan still runs at
+    /// `RAWDB_RESCAN_SECS`. Default 5s; minimum 1.
+    #[arg(long, env = "RAWDB_SYNC_POLL_SECS", default_value_t = 5)]
+    pub sync_poll_secs: u64,
+
     // ---- Upload ---------------------------------------------------------------
     #[arg(long, env = "RAWDB_UPLOAD_MODE", default_value = "either")]
     pub upload_mode: UploadMode,
