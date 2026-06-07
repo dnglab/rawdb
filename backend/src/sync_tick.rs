@@ -148,11 +148,21 @@ pub fn spawn_watcher(
     interval: Duration,
 ) {
     tokio::spawn(async move {
+        // Prime the per-domain cells with whatever ETags exist *right
+        // now* before we start emitting "changed" signals. Without this,
+        // a pod's first poll would treat every pre-existing tick object
+        // (possibly written hours ago by a peer pod) as a fresh change
+        // and fire a misleading SyncTriggered event — see the user-
+        // reported "modified a set, event said users" symptom.
+        if let Err(e) = prime_cells(&s3, &sync_ticks).await {
+            tracing::warn!(error = %e, "sync tick prime failed; first poll may over-fire");
+        }
+
         let mut tick = tokio::time::interval(interval);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // Skip the first immediate tick: the periodic scanner runs
         // run_once() at startup itself, so the very first poll has no
-        // baseline to compare against.
+        // baseline to compare against beyond the priming above.
         tick.tick().await;
         loop {
             tick.tick().await;
@@ -176,6 +186,27 @@ pub fn spawn_watcher(
             run_passes(&scanner, &changed).await;
         }
     });
+}
+
+/// One-shot HEAD of all three keys at startup, storing whatever ETag
+/// exists into the per-domain cell so the next poll has a baseline.
+/// Missing keys leave the cell `None`; that's correct — a later first
+/// PUT will be observed as a transition from `None` to `Some(etag)` and
+/// reported as a change.
+async fn prime_cells(s3: &S3, sync_ticks: &TickState) -> anyhow::Result<()> {
+    let (u, s, p) = tokio::join!(
+        s3.head(Domain::Users.key()),
+        s3.head(Domain::Sets.key()),
+        s3.head(Domain::Pending.key()),
+    );
+    for (d, head) in [(Domain::Users, u), (Domain::Sets, s), (Domain::Pending, p)] {
+        let head = head?;
+        let Some(info) = head else { continue };
+        let Some(etag) = info.etag else { continue };
+        let mut cell = sync_ticks.cell(d).lock().await;
+        *cell = Some(etag);
+    }
+    Ok(())
 }
 
 /// HEAD all three keys concurrently, return the domains whose ETag
