@@ -115,6 +115,7 @@ async fn main() -> Result<()> {
         s3.clone(),
         scanner.clone(),
         sync_ticks.clone(),
+        events.clone(),
         std::time::Duration::from_secs(config.sync_poll_secs.max(1)),
     );
 

@@ -128,6 +128,20 @@ impl RawdbEvents {
         });
     }
 
+    /// Emit `Normal SyncTriggered` when the cross-pod sync-tick
+    /// watcher observes one or more domain ticks change and runs the
+    /// matching catch-up scan pass(es). Not fired for the periodic
+    /// full scan — only for notified resyncs.
+    pub fn sync_triggered(&self, domains: &str) {
+        self.publish(Event {
+            type_: EventType::Normal,
+            reason: "SyncTriggered".into(),
+            note: Some(format!("catch-up scan: {domains}")),
+            action: "Sync".into(),
+            secondary: None,
+        });
+    }
+
     /// Emit `Warning ScanError`. `stage` is a short label naming where
     /// in the scan it failed (e.g. `scan_one_set`, `list_prefixes`),
     /// `err` is the human-readable error.

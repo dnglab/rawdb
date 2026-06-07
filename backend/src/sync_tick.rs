@@ -26,6 +26,7 @@ use serde::Serialize;
 use tokio::sync::Mutex;
 
 use crate::cache::scanner::Scanner;
+use crate::events::RawdbEvents;
 use crate::s3::S3;
 use crate::state::AppState;
 
@@ -136,10 +137,14 @@ pub async fn bump(state: &AppState, domains: &[Domain], reason: &str) {
 
 /// Background loop: HEADs the three tick keys at `interval`, runs the
 /// matching scanner pass when an ETag changes. Never toggles readiness.
+/// On each triggered resync (not the periodic full scan) emits a K8s
+/// `Normal SyncTriggered` event so cluster operators can correlate
+/// catch-up scans with admin actions on peer pods.
 pub fn spawn_watcher(
     s3: S3,
     scanner: Arc<Scanner>,
     sync_ticks: Arc<TickState>,
+    events: RawdbEvents,
     interval: Duration,
 ) {
     tokio::spawn(async move {
@@ -161,8 +166,13 @@ pub fn spawn_watcher(
             if changed.is_empty() {
                 continue;
             }
-            let labels: Vec<&str> = changed.iter().map(|d| d.label()).collect();
-            tracing::info!(domains = ?labels, "sync tick observed change, running affected passes");
+            // Deterministic order so tests / log greps don't have to
+            // accommodate HashSet iteration order.
+            let mut labels: Vec<&str> = changed.iter().map(|d| d.label()).collect();
+            labels.sort_unstable();
+            let joined = labels.join(",");
+            tracing::info!(domains = %joined, "sync tick observed change, running affected passes");
+            events.sync_triggered(&joined);
             run_passes(&scanner, &changed).await;
         }
     });
