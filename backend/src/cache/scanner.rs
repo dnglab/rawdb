@@ -9,7 +9,14 @@
 //! the >10k-set scalability path.
 //!
 //! The scanner runs once on startup (flipping the readiness watcher to
-//! `true` afterwards) then on a `tokio::time::interval` thereafter.
+//! `true` afterwards) then every `RAWDB_RESCAN_SECS` thereafter.
+//!
+//! **Consistency rule:** a set's (or pending upload's) cache row is only
+//! replaced after *every* S3 read for it succeeded and every file listed
+//! in its meta was found in S3. Anything less leaves the existing row
+//! untouched and does not store the meta ETag, so the next scan retries.
+//! A partial read must never shrink the catalogue: `/api/export` serves
+//! this cache, and `rawdb_sync.py --delete` prunes whatever it omits.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -25,14 +32,19 @@ use tokio::time::Instant;
 use crate::cache::db::{Db, FileSizeInfo, UserRow};
 use crate::config::Config;
 use crate::events::RawdbEvents;
-use crate::meta::{self, RawdbMeta};
-use crate::s3::S3;
+use crate::meta::{self, FileMeta, RawdbMeta};
+use crate::s3::{ObjectInfo, S3};
 use crate::state::{AppMetrics, AppState};
 
 pub const SAMPLES_PREFIX: &str = "samples/";
 pub const PENDING_PREFIX: &str = "pending/";
 pub const USERS_KEY: &str = "_system/users.toml";
 pub const META_FILE: &str = "rawdb-meta.toml";
+
+/// Retry delay while the pod has not yet completed a clean initial scan.
+/// Short so a transient S3 hiccup at startup doesn't keep the pod
+/// not-ready for a full `RAWDB_RESCAN_SECS`.
+const INITIAL_SCAN_RETRY: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub struct Scanner {
@@ -62,16 +74,18 @@ impl Scanner {
         }
     }
 
-    /// Spawn the scanner loop. Returns immediately. The first successful
-    /// `run_once()` flips `ready_tx` to `true` so the readiness probe lets
-    /// the LB route traffic to this pod.
+    /// Spawn the scanner loop. Returns immediately. The pod only turns
+    /// ready after a `run_once()` that completed with **zero** transient
+    /// S3 failures — otherwise sets that failed to load would simply be
+    /// missing from a fresh (empty) cache and `/api/export` would serve a
+    /// partial catalogue. Until then the scan retries every
+    /// [`INITIAL_SCAN_RETRY`]. Content problems (`incomplete` sets, e.g.
+    /// unparseable meta) don't block readiness: they can't heal by
+    /// waiting. Once ready, the flag never flips back; later failures
+    /// keep existing rows untouched, so the cache stays complete.
     pub fn spawn(self, ready_tx: watch::Sender<bool>) {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(self.interval);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            // First tick fires immediately.
             loop {
-                interval.tick().await;
                 match self.run_once().await {
                     Ok(summary) => {
                         tracing::info!(
@@ -82,10 +96,19 @@ impl Scanner {
                             pending_updated = summary.pending_updated,
                             pending_deleted = summary.pending_deleted,
                             users_updated = summary.users_updated,
+                            transient_failures = summary.transient_failures,
+                            incomplete = summary.incomplete,
                             "scan complete",
                         );
                         if !*ready_tx.borrow() {
-                            let _ = ready_tx.send(true);
+                            if summary.transient_failures == 0 {
+                                let _ = ready_tx.send(true);
+                            } else {
+                                tracing::warn!(
+                                    transient_failures = summary.transient_failures,
+                                    "initial scan had S3 read failures; staying not-ready and retrying",
+                                );
+                            }
                         }
                     }
                     Err(e) => {
@@ -94,6 +117,12 @@ impl Scanner {
                         self.events.scan_error("run_once", &format!("{e:#}"));
                     }
                 }
+                let wait = if *ready_tx.borrow() {
+                    self.interval
+                } else {
+                    INITIAL_SCAN_RETRY.min(self.interval)
+                };
+                tokio::time::sleep(wait).await;
             }
         });
     }
@@ -109,6 +138,40 @@ impl Scanner {
         );
     }
 
+    /// Fold one per-set / per-upload task result into `res`. Transient
+    /// S3 errors and content problems are logged, counted in the
+    /// `errors` metric and emitted as `ScanError` events; neither ever
+    /// touches the cache row (see the module-level consistency rule).
+    fn tally(
+        &self,
+        res: &mut PassResult,
+        stage: &'static str,
+        joined: std::result::Result<Result<SetOutcome>, tokio::task::JoinError>,
+    ) {
+        match joined {
+            Ok(Ok(SetOutcome::Updated)) => res.updated += 1,
+            Ok(Ok(SetOutcome::Unchanged | SetOutcome::MetaMissing)) => {}
+            Ok(Ok(SetOutcome::Incomplete(reason))) => {
+                res.incomplete += 1;
+                tracing::warn!(stage, %reason, "skipped incomplete entry; kept previous cache row");
+                self.record_error("incomplete");
+                self.events.scan_error(stage, &reason);
+            }
+            Ok(Err(e)) => {
+                res.transient_failures += 1;
+                tracing::warn!(stage, error = ?e, "S3 read failed; kept previous cache row");
+                self.record_error(stage);
+                self.events.scan_error(stage, &format!("{e:#}"));
+            }
+            Err(e) => {
+                res.transient_failures += 1;
+                tracing::warn!(stage, error = ?e, "scan task join failed");
+                self.record_error(stage);
+                self.events.scan_error(stage, &format!("{e:#}"));
+            }
+        }
+    }
+
     pub async fn run_once(&self) -> Result<ScanSummary> {
         let started = Instant::now();
         let mut summary = ScanSummary::default();
@@ -119,12 +182,16 @@ impl Scanner {
         summary.samples_seen = a.seen;
         summary.samples_updated = a.updated;
         summary.samples_deleted = a.deleted;
+        summary.transient_failures += a.transient_failures;
+        summary.incomplete += a.incomplete;
 
         // Pass B
         let b = self.scan_pending(sem.clone()).await?;
         summary.pending_seen = b.seen;
         summary.pending_updated = b.updated;
         summary.pending_deleted = b.deleted;
+        summary.transient_failures += b.transient_failures;
+        summary.incomplete += b.incomplete;
 
         // Pass C
         summary.users_updated = self.scan_users().await? as u64;
@@ -185,7 +252,7 @@ impl Scanner {
             .collect();
         let prior_keys: HashSet<(String, String)> = self.db.list_set_keys()?.into_iter().collect();
 
-        let mut tasks: JoinSet<Result<bool>> = JoinSet::new();
+        let mut tasks: JoinSet<Result<SetOutcome>> = JoinSet::new();
         for prefix in model_prefixes {
             let Some((maker, model)) = split_set_prefix(&prefix) else {
                 continue;
@@ -199,23 +266,13 @@ impl Scanner {
             });
         }
         while let Some(j) = tasks.join_next().await {
-            match j {
-                Ok(Ok(true)) => res.updated += 1,
-                Ok(Ok(false)) => {}
-                Ok(Err(e)) => {
-                    tracing::warn!(error = ?e, "scan_one_set failed");
-                    self.record_error("scan_one_set");
-                    self.events.scan_error("scan_one_set", &format!("{e:#}"));
-                }
-                Err(e) => {
-                    tracing::warn!(error = ?e, "scan_one_set join failed");
-                    self.record_error("scan_one_set");
-                    self.events.scan_error("scan_one_set", &format!("{e:#}"));
-                }
-            }
+            self.tally(&mut res, "scan_one_set", j);
         }
 
-        // Delete sets present in DB but absent from S3.
+        // Delete sets present in DB but absent from S3. Safe against read
+        // errors: `live_in_s3` comes from a listing that paginated to the
+        // end without error (any failed page aborted this pass above), and
+        // a set whose per-set read failed is still in `live_in_s3`.
         for key in prior_keys.difference(&live_in_s3) {
             if let Err(e) = self.db.delete_set(&key.0, &key.1) {
                 tracing::warn!(maker = %key.0, model = %key.1, error = ?e, "delete_set failed");
@@ -243,7 +300,7 @@ impl Scanner {
             .collect();
         let prior: HashSet<String> = self.db.list_pending_upload_ids()?.into_iter().collect();
 
-        let mut tasks: JoinSet<Result<bool>> = JoinSet::new();
+        let mut tasks: JoinSet<Result<SetOutcome>> = JoinSet::new();
         for prefix in upload_prefixes {
             let Some(upload_id) = split_pending_prefix(&prefix) else {
                 continue;
@@ -257,20 +314,7 @@ impl Scanner {
             });
         }
         while let Some(j) = tasks.join_next().await {
-            match j {
-                Ok(Ok(true)) => res.updated += 1,
-                Ok(Ok(false)) => {}
-                Ok(Err(e)) => {
-                    tracing::warn!(error = ?e, "scan_one_pending failed");
-                    self.record_error("scan_one_pending");
-                    self.events.scan_error("scan_one_pending", &format!("{e:#}"));
-                }
-                Err(e) => {
-                    tracing::warn!(error = ?e, "scan_one_pending join failed");
-                    self.record_error("scan_one_pending");
-                    self.events.scan_error("scan_one_pending", &format!("{e:#}"));
-                }
-            }
+            self.tally(&mut res, "scan_one_pending", j);
         }
 
         for upload_id in prior.difference(&live) {
@@ -307,31 +351,37 @@ impl Scanner {
     }
 
     /// Refresh a single approved-set prefix immediately (used after
-    /// approve/reject so the originating pod's UI reflects the change
-    /// without waiting for the next tick).
+    /// approve/edit/delete so the originating pod's UI reflects the
+    /// change without waiting for the next tick).
+    ///
+    /// Drops the local row **only** when the set's meta is authoritatively
+    /// gone from S3. An unchanged ETag, an incomplete set or a read error
+    /// never deletes.
     pub async fn refresh_one_set(&self, maker: &str, model: &str) -> Result<()> {
         let prefix = format!("{SAMPLES_PREFIX}{maker}/{model}/");
-        let updated = scan_one_set(&self.db, &self.s3, &prefix, maker, model).await?;
-        if !updated {
-            // If S3 doesn't have it anymore, drop locally.
-            if !self
-                .s3
-                .list_common_prefixes(&prefix)
-                .await?
-                .iter()
-                .any(|_| true)
-            {
-                let _ = self.db.delete_set(maker, model);
+        match scan_one_set(&self.db, &self.s3, &prefix, maker, model).await? {
+            SetOutcome::MetaMissing => self.db.delete_set(maker, model)?,
+            SetOutcome::Incomplete(reason) => {
+                tracing::warn!(maker, model, %reason, "refresh: incomplete set; kept previous cache row");
+                self.record_error("incomplete");
+                self.events.scan_error("refresh_one_set", &reason);
             }
+            SetOutcome::Updated | SetOutcome::Unchanged => {}
         }
         Ok(())
     }
 
+    /// Like [`Self::refresh_one_set`] for a pending upload.
     pub async fn refresh_one_pending(&self, upload_id: &str) -> Result<()> {
         let prefix = format!("{PENDING_PREFIX}{upload_id}/");
-        let updated = scan_one_pending(&self.db, &self.s3, &prefix, upload_id).await?;
-        if !updated {
-            let _ = self.db.delete_pending_by_upload_id(upload_id);
+        match scan_one_pending(&self.db, &self.s3, &prefix, upload_id).await? {
+            SetOutcome::MetaMissing => self.db.delete_pending_by_upload_id(upload_id)?,
+            SetOutcome::Incomplete(reason) => {
+                tracing::warn!(upload_id, %reason, "refresh: incomplete pending upload; kept previous cache row");
+                self.record_error("incomplete");
+                self.events.scan_error("refresh_one_pending", &reason);
+            }
+            SetOutcome::Updated | SetOutcome::Unchanged => {}
         }
         Ok(())
     }
@@ -346,6 +396,12 @@ pub struct ScanSummary {
     pub pending_updated: u64,
     pub pending_deleted: u64,
     pub users_updated: u64,
+    /// Per-entry S3 read errors (HTTP/timeout/listing). Blocks the
+    /// initial readiness flip.
+    pub transient_failures: u64,
+    /// Entries skipped for content problems (bad meta, meta listing a
+    /// file not present in S3). Does not block readiness.
+    pub incomplete: u64,
 }
 
 #[derive(Default)]
@@ -353,28 +409,52 @@ struct PassResult {
     seen: u64,
     updated: u64,
     deleted: u64,
+    transient_failures: u64,
+    incomplete: u64,
+}
+
+/// Result of reconciling one set / pending upload. S3 read errors are
+/// returned as `Err` instead. Only `Updated` writes to the cache; only
+/// `MetaMissing` may justify deleting a row (and only in the targeted
+/// `refresh_one_*` paths — the full passes delete based on the listing).
+#[derive(Debug, PartialEq, Eq)]
+enum SetOutcome {
+    /// Every read succeeded and every declared file was present; row upserted.
+    Updated,
+    /// Meta ETag matches the cached one; nothing to do.
+    Unchanged,
+    /// HEAD on the meta returned an authoritative NotFound.
+    MetaMissing,
+    /// Content problem (unparseable meta, or meta lists files absent
+    /// from S3). Row and stored ETag left untouched so the next scan
+    /// retries.
+    Incomplete(String),
 }
 
 // ---------------------------------------------------------------------------
 // Per-set / per-pending workers
 // ---------------------------------------------------------------------------
 
-async fn scan_one_set(db: &Db, s3: &S3, prefix: &str, maker: &str, model: &str) -> Result<bool> {
+async fn scan_one_set(
+    db: &Db,
+    s3: &S3,
+    prefix: &str,
+    maker: &str,
+    model: &str,
+) -> Result<SetOutcome> {
     let meta_key = format!("{prefix}{META_FILE}");
-    let head = match s3.head(&meta_key).await? {
-        Some(h) => h,
-        None => return Ok(false), // model dir present but no meta yet
+    let Some(head) = s3.head(&meta_key).await? else {
+        return Ok(SetOutcome::MetaMissing);
     };
     let prior = db.get_set_meta_etag(maker, model)?;
     if prior.as_deref() == head.etag.as_deref() {
-        return Ok(false);
+        return Ok(SetOutcome::Unchanged);
     }
     let (bytes, etag) = s3.get_bytes(&meta_key).await?;
-    let mut meta = match meta::parse(std::str::from_utf8(&bytes).context("meta utf-8")?) {
+    let mut meta = match parse_meta(&bytes) {
         Ok(m) => m,
-        Err(e) => {
-            tracing::warn!(maker, model, error = ?e, "bad rawdb-meta.toml; skipping");
-            return Ok(false);
+        Err(reason) => {
+            return Ok(SetOutcome::Incomplete(format!("{maker}/{model}: {reason}")));
         }
     };
     // `uploaded_at` is optional in the meta; fall back to the meta object's
@@ -382,27 +462,39 @@ async fn scan_one_set(db: &Db, s3: &S3, prefix: &str, maker: &str, model: &str) 
     if meta.set.uploaded_at.is_none() {
         meta.set.uploaded_at = head.last_modified;
     }
-    let files_with_sizes = match_files(&meta, s3, prefix).await?;
+    let objects = s3.list_objects(prefix).await?;
+    let files_with_sizes = match pair_files(&meta, prefix, objects) {
+        Ok(f) => f,
+        Err(missing) => {
+            return Ok(SetOutcome::Incomplete(format!(
+                "{maker}/{model}: meta lists files not present in S3: {}",
+                missing.join(", ")
+            )));
+        }
+    };
     db.upsert_set(&meta, etag.as_deref(), &files_with_sizes)?;
-    Ok(true)
+    Ok(SetOutcome::Updated)
 }
 
-async fn scan_one_pending(db: &Db, s3: &S3, prefix: &str, upload_id: &str) -> Result<bool> {
+async fn scan_one_pending(
+    db: &Db,
+    s3: &S3,
+    prefix: &str,
+    upload_id: &str,
+) -> Result<SetOutcome> {
     let meta_key = format!("{prefix}{META_FILE}");
-    let head = match s3.head(&meta_key).await? {
-        Some(h) => h,
-        None => return Ok(false),
+    let Some(head) = s3.head(&meta_key).await? else {
+        return Ok(SetOutcome::MetaMissing);
     };
     let prior = db.get_pending_meta_etag(upload_id)?;
     if prior.as_deref() == head.etag.as_deref() {
-        return Ok(false);
+        return Ok(SetOutcome::Unchanged);
     }
     let (bytes, etag) = s3.get_bytes(&meta_key).await?;
-    let mut meta = match meta::parse(std::str::from_utf8(&bytes).context("meta utf-8")?) {
+    let mut meta = match parse_meta(&bytes) {
         Ok(m) => m,
-        Err(e) => {
-            tracing::warn!(upload_id, error = ?e, "bad pending meta; skipping");
-            return Ok(false);
+        Err(reason) => {
+            return Ok(SetOutcome::Incomplete(format!("pending {upload_id}: {reason}")));
         }
     };
     // `uploaded_at` is optional; fall back to the meta object's S3
@@ -410,21 +502,37 @@ async fn scan_one_pending(db: &Db, s3: &S3, prefix: &str, upload_id: &str) -> Re
     if meta.set.uploaded_at.is_none() {
         meta.set.uploaded_at = head.last_modified;
     }
-    let files_with_sizes = match_files(&meta, s3, prefix).await?;
+    let objects = s3.list_objects(prefix).await?;
+    let files_with_sizes = match pair_files(&meta, prefix, objects) {
+        Ok(f) => f,
+        Err(missing) => {
+            return Ok(SetOutcome::Incomplete(format!(
+                "pending {upload_id}: meta lists files not present in S3: {}",
+                missing.join(", ")
+            )));
+        }
+    };
     db.upsert_pending(upload_id, &meta, etag.as_deref(), &files_with_sizes)?;
-    Ok(true)
+    Ok(SetOutcome::Updated)
 }
 
-/// Pair each meta `[[files]]` entry with the size + ETag observed on S3.
-/// Files declared in meta but missing in S3 are dropped (logged); files in
-/// S3 not mentioned in meta are ignored.
-async fn match_files(
+/// Decode + parse a `rawdb-meta.toml` body. The error is a human-readable
+/// reason for an `Incomplete` outcome (content problem, not an S3 error).
+fn parse_meta(bytes: &[u8]) -> std::result::Result<RawdbMeta, String> {
+    let s = std::str::from_utf8(bytes).map_err(|e| format!("meta is not UTF-8: {e}"))?;
+    meta::parse(s).map_err(|e| format!("invalid rawdb-meta.toml: {e}"))
+}
+
+/// Pair each meta `[[files]]` entry with the size + ETag observed in the
+/// (complete) S3 listing of `prefix`. Strict: if any declared file is
+/// absent from the listing, returns `Err` with *all* missing paths and no
+/// partial list — a shortened file list must never reach the cache.
+/// Objects in S3 that the meta doesn't mention are ignored.
+fn pair_files(
     meta: &RawdbMeta,
-    s3: &S3,
     prefix: &str,
-) -> Result<Vec<(crate::meta::FileMeta, FileSizeInfo)>> {
-    let objects = s3.list_objects(prefix).await?;
-    // Build map of rel-path -> (size, etag).
+    objects: Vec<ObjectInfo>,
+) -> std::result::Result<Vec<(FileMeta, FileSizeInfo)>, Vec<String>> {
     let mut by_rel: HashMap<String, (u64, Option<String>)> = HashMap::new();
     for obj in objects {
         let Some(rel) = obj.key.strip_prefix(prefix) else {
@@ -436,14 +544,24 @@ async fn match_files(
         by_rel.insert(rel.to_string(), (obj.size, obj.etag));
     }
     let mut out = Vec::with_capacity(meta.files.len());
+    let mut missing = Vec::new();
     for f in &meta.files {
-        let Some((size, etag)) = by_rel.get(&f.path).cloned() else {
-            tracing::warn!(maker = %meta.set.maker, model = %meta.set.model, path = %f.path, "meta lists a file not present in S3");
-            continue;
-        };
-        out.push((f.clone(), FileSizeInfo { size, etag }));
+        match by_rel.get(&f.path) {
+            Some((size, etag)) => out.push((
+                f.clone(),
+                FileSizeInfo {
+                    size: *size,
+                    etag: etag.clone(),
+                },
+            )),
+            None => missing.push(f.path.clone()),
+        }
     }
-    Ok(out)
+    if missing.is_empty() {
+        Ok(out)
+    } else {
+        Err(missing)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +670,75 @@ mod tests {
         );
         assert_eq!(split_set_prefix("samples/Canon/"), None);
         assert_eq!(split_set_prefix("pending/Canon/EOS R5/"), None);
+    }
+
+    fn obj(key: &str, size: u64) -> ObjectInfo {
+        ObjectInfo {
+            key: key.to_string(),
+            size,
+            etag: Some(format!("etag-{size}")),
+            last_modified: None,
+        }
+    }
+
+    fn two_file_meta() -> RawdbMeta {
+        meta::parse(
+            r#"
+            [set]
+            maker = "Canon"
+            model = "EOS R5"
+
+            [[files]]
+            path = "raw/a.cr3"
+
+            [[files]]
+            path = "lossless/b.cr3"
+            "#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn pair_files_complete_listing_pairs_everything() {
+        let prefix = "samples/Canon/EOS R5/";
+        let objects = vec![
+            obj("samples/Canon/EOS R5/rawdb-meta.toml", 1),
+            obj("samples/Canon/EOS R5/raw/a.cr3", 10),
+            obj("samples/Canon/EOS R5/lossless/b.cr3", 20),
+            obj("samples/Canon/EOS R5/unlisted.txt", 30),
+        ];
+        let out = pair_files(&two_file_meta(), prefix, objects).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0.path, "raw/a.cr3");
+        assert_eq!(out[0].1.size, 10);
+        assert_eq!(out[1].0.path, "lossless/b.cr3");
+        assert_eq!(out[1].1.etag.as_deref(), Some("etag-20"));
+    }
+
+    #[test]
+    fn pair_files_missing_file_yields_no_partial_list() {
+        let prefix = "samples/Canon/EOS R5/";
+        // `lossless/b.cr3` is declared in the meta but absent from the listing
+        // (e.g. still uploading, or a lagging listing). Must not produce a
+        // shortened file list.
+        let objects = vec![
+            obj("samples/Canon/EOS R5/rawdb-meta.toml", 1),
+            obj("samples/Canon/EOS R5/raw/a.cr3", 10),
+        ];
+        let err = pair_files(&two_file_meta(), prefix, objects).unwrap_err();
+        assert_eq!(err, vec!["lossless/b.cr3".to_string()]);
+    }
+
+    #[test]
+    fn pair_files_reports_all_missing_paths() {
+        let err = pair_files(&two_file_meta(), "samples/Canon/EOS R5/", vec![]).unwrap_err();
+        assert_eq!(err, vec!["raw/a.cr3".to_string(), "lossless/b.cr3".to_string()]);
+    }
+
+    #[test]
+    fn parse_meta_rejects_garbage_as_content_problem() {
+        assert!(parse_meta(b"not = [valid").is_err());
+        assert!(parse_meta(&[0xff, 0xfe]).is_err());
     }
 
     #[test]
