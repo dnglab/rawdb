@@ -112,7 +112,7 @@ impl Scanner {
                         }
                     }
                     Err(e) => {
-                        tracing::error!(error = ?e, "scan failed");
+                        tracing::error!(error = %format!("{e:#}"), "scan failed");
                         self.record_error("run_once");
                         self.events.scan_error("run_once", &format!("{e:#}"));
                     }
@@ -159,13 +159,13 @@ impl Scanner {
             }
             Ok(Err(e)) => {
                 res.transient_failures += 1;
-                tracing::warn!(stage, error = ?e, "S3 read failed; kept previous cache row");
+                tracing::warn!(stage, error = %format!("{e:#}"), "S3 read failed; kept previous cache row");
                 self.record_error(stage);
                 self.events.scan_error(stage, &format!("{e:#}"));
             }
             Err(e) => {
                 res.transient_failures += 1;
-                tracing::warn!(stage, error = ?e, "scan task join failed");
+                tracing::warn!(stage, error = %format!("{e:#}"), "scan task join failed");
                 self.record_error(stage);
                 self.events.scan_error(stage, &format!("{e:#}"));
             }
@@ -275,7 +275,7 @@ impl Scanner {
         // a set whose per-set read failed is still in `live_in_s3`.
         for key in prior_keys.difference(&live_in_s3) {
             if let Err(e) = self.db.delete_set(&key.0, &key.1) {
-                tracing::warn!(maker = %key.0, model = %key.1, error = ?e, "delete_set failed");
+                tracing::warn!(maker = %key.0, model = %key.1, error = %format!("{e:#}"), "delete_set failed");
                 self.record_error("delete_set");
             } else {
                 res.deleted += 1;
@@ -319,7 +319,7 @@ impl Scanner {
 
         for upload_id in prior.difference(&live) {
             if let Err(e) = self.db.delete_pending_by_upload_id(upload_id) {
-                tracing::warn!(error = ?e, "delete_pending failed");
+                tracing::warn!(error = %format!("{e:#}"), "delete_pending failed");
                 self.record_error("delete_pending");
             } else {
                 res.deleted += 1;

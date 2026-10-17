@@ -8,16 +8,18 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::{Region, SharedCredentialsProvider};
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::types::{
     CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier,
 };
 use aws_sdk_s3::Client;
+use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
 use chrono::{DateTime, Utc};
 
 use crate::config::Config;
@@ -126,7 +128,7 @@ impl S3 {
             .send();
 
         while let Some(page) = req.next().await {
-            let page = page.context("ListObjectsV2 (delimited)")?;
+            let page = page.map_err(|e| sdk_error("ListObjectsV2 (delimited)", prefix, e))?;
             for cp in page.common_prefixes() {
                 if let Some(p) = cp.prefix() {
                     out.push(p.to_string());
@@ -148,7 +150,7 @@ impl S3 {
             .send();
 
         while let Some(page) = req.next().await {
-            let page = page.context("ListObjectsV2 (recursive)")?;
+            let page = page.map_err(|e| sdk_error("ListObjectsV2 (recursive)", prefix, e))?;
             for obj in page.contents() {
                 let Some(key) = obj.key() else { continue };
                 out.push(ObjectInfo {
@@ -187,7 +189,7 @@ impl S3 {
                 if is_not_found(&e) {
                     Ok(None)
                 } else {
-                    Err(anyhow::anyhow!("HeadObject {key}: {e}"))
+                    Err(sdk_error("HeadObject", key, e))
                 }
             }
         }
@@ -217,7 +219,7 @@ impl S3 {
             if is_not_found_get(&e) {
                 S3Error::NotFound(key.into())
             } else {
-                S3Error::Other(anyhow::anyhow!("GetObject {key}: {e}"))
+                S3Error::Other(sdk_error("GetObject", key, e))
             }
         })?;
         Ok(GetStream {
@@ -242,7 +244,7 @@ impl S3 {
                 if is_not_found_get(&e) {
                     S3Error::NotFound(key.into())
                 } else {
-                    S3Error::Other(anyhow::anyhow!("GetObject {key}: {e}"))
+                    S3Error::Other(sdk_error("GetObject", key, e))
                 }
             })?;
 
@@ -286,7 +288,7 @@ impl S3 {
             if is_precondition_failed(&e) {
                 S3Error::PreconditionFailed
             } else {
-                S3Error::Other(anyhow::anyhow!("PutObject {key}: {e}"))
+                S3Error::Other(sdk_error("PutObject", key, e))
             }
         })?;
         Ok(out.e_tag().map(strip_etag_quotes).unwrap_or_default())
@@ -305,7 +307,7 @@ impl S3 {
             .copy_source(&source)
             .send()
             .await
-            .with_context(|| format!("CopyObject {src_key} -> {dst_key}"))?;
+            .map_err(|e| sdk_error("CopyObject", &format!("{src_key} -> {dst_key}"), e))?;
         Ok(())
     }
 
@@ -316,7 +318,7 @@ impl S3 {
             .key(key)
             .send()
             .await
-            .with_context(|| format!("DeleteObject {key}"))?;
+            .map_err(|e| sdk_error("DeleteObject", key, e))?;
         Ok(())
     }
 
@@ -345,7 +347,7 @@ impl S3 {
                 .delete(del)
                 .send()
                 .await
-                .with_context(|| format!("DeleteObjects under {prefix}"))?;
+                .map_err(|e| sdk_error("DeleteObjects under", prefix, e))?;
             deleted += chunk.len();
         }
         Ok(deleted)
@@ -393,7 +395,7 @@ impl S3 {
             .key(key)
             .send()
             .await
-            .with_context(|| format!("CreateMultipartUpload {key}"))?;
+            .map_err(|e| sdk_error("CreateMultipartUpload", key, e))?;
         out.upload_id()
             .map(String::from)
             .ok_or_else(|| anyhow::anyhow!("CreateMultipartUpload {key}: no upload id"))
@@ -448,7 +450,7 @@ impl S3 {
             .multipart_upload(mpu)
             .send()
             .await
-            .with_context(|| format!("CompleteMultipartUpload {key}"))?;
+            .map_err(|e| sdk_error("CompleteMultipartUpload", key, e))?;
         Ok(())
     }
 
@@ -463,12 +465,63 @@ impl S3 {
             .upload_id(upload_id)
             .send()
             .await
-            .with_context(|| format!("AbortMultipartUpload {key}"))?;
+            .map_err(|e| sdk_error("AbortMultipartUpload", key, e))?;
         Ok(())
     }
 }
 
 // ---- helpers ---------------------------------------------------------------
+
+/// Build an error message from an SDK error that keeps the SDK's own
+/// `Display` text (`service error`, `dispatch failure`, …) and appends
+/// what the server actually said, which that text omits:
+///
+/// `<op> <target>: service error (HTTP 403, AccessDenied: Access Denied, request id …)`
+///
+/// A HEAD response has no body, so for HeadObject only the status and
+/// request id are available. For transport-level failures (timeout,
+/// dispatch, construction) the underlying cause chain is appended
+/// instead. The message is self-contained, so the SDK error isn't kept
+/// as a source — `{e:#}` would otherwise repeat "service error".
+fn sdk_error<E>(op: &str, target: &str, e: SdkError<E, HttpResponse>) -> anyhow::Error
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    let mut details: Vec<String> = Vec::new();
+    match &e {
+        SdkError::ServiceError(svc) => {
+            details.push(format!("HTTP {}", svc.raw().status().as_u16()));
+            match (svc.err().code(), svc.err().message()) {
+                (Some(code), Some(msg)) => details.push(format!("{code}: {msg}")),
+                (Some(code), None) => details.push(code.to_string()),
+                (None, Some(msg)) => details.push(msg.to_string()),
+                (None, None) => {}
+            }
+            if let Some(id) = svc.raw().headers().get("x-amz-request-id") {
+                details.push(format!("request id {id}"));
+            }
+        }
+        SdkError::ResponseError(r) => {
+            details.push(format!("HTTP {}", r.raw().status().as_u16()));
+        }
+        _ => {
+            let mut cause = std::error::Error::source(&e);
+            let mut chain = Vec::new();
+            while let Some(c) = cause {
+                chain.push(c.to_string());
+                cause = c.source();
+            }
+            if !chain.is_empty() {
+                details.push(chain.join(": "));
+            }
+        }
+    }
+    if details.is_empty() {
+        anyhow::anyhow!("{op} {target}: {e}")
+    } else {
+        anyhow::anyhow!("{op} {target}: {e} ({})", details.join(", "))
+    }
+}
 
 fn strip_etag_quotes(s: &str) -> String {
     s.trim_matches('"').to_string()
@@ -527,4 +580,64 @@ fn is_precondition_failed(
         return svc.raw().status().as_u16() == 412;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_sdk_s3::error::{ConnectorError, ErrorMetadata};
+    use aws_sdk_s3::operation::get_object::GetObjectError;
+    use aws_sdk_s3::operation::head_object::HeadObjectError;
+    use aws_sdk_s3::primitives::SdkBody;
+    use aws_smithy_runtime_api::http::StatusCode;
+
+    fn raw(status: u16, request_id: Option<&'static str>) -> HttpResponse {
+        let mut r = HttpResponse::new(StatusCode::try_from(status).unwrap(), SdkBody::empty());
+        if let Some(id) = request_id {
+            r.headers_mut().insert("x-amz-request-id", id);
+        }
+        r
+    }
+
+    #[test]
+    fn head_error_keeps_display_and_adds_status_and_request_id() {
+        // HEAD responses carry no body, so no S3 code/message.
+        let e = SdkError::service_error(
+            HeadObjectError::generic(ErrorMetadata::builder().build()),
+            raw(403, Some("REQ123")),
+        );
+        let msg = sdk_error("HeadObject", "samples/Nikon/Coolpix P330/rawdb-meta.toml", e).to_string();
+        assert_eq!(
+            msg,
+            "HeadObject samples/Nikon/Coolpix P330/rawdb-meta.toml: service error (HTTP 403, request id REQ123)"
+        );
+    }
+
+    #[test]
+    fn get_error_includes_s3_code_and_message() {
+        let e = SdkError::service_error(
+            GetObjectError::generic(
+                ErrorMetadata::builder()
+                    .code("SlowDown")
+                    .message("Please reduce your request rate.")
+                    .build(),
+            ),
+            raw(503, None),
+        );
+        let msg = sdk_error("GetObject", "a/b", e).to_string();
+        assert_eq!(
+            msg,
+            "GetObject a/b: service error (HTTP 503, SlowDown: Please reduce your request rate.)"
+        );
+    }
+
+    #[test]
+    fn dispatch_failure_appends_cause_chain() {
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset by peer");
+        let e: SdkError<HeadObjectError, HttpResponse> =
+            SdkError::dispatch_failure(ConnectorError::io(Box::new(io)));
+        let msg = sdk_error("HeadObject", "a/b", e).to_string();
+        assert!(msg.starts_with("HeadObject a/b: dispatch failure ("), "{msg}");
+        assert!(msg.contains("connection reset by peer"), "{msg}");
+    }
 }
