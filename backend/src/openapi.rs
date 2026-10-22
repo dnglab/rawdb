@@ -6,7 +6,7 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-use crate::routes::{self, admin, auth, export, me, public, upload};
+use crate::routes::{self, admin, auth, export, feeds, me, public, upload};
 
 /// Registers the cookie-based session scheme so endpoints can declare
 /// `security(("session_cookie" = []))`. The session is the JWT issued by
@@ -53,6 +53,9 @@ impl Modify for SecurityAddon {
         public::pending,
         public::download,
         export::export,
+        // Atom feeds
+        feeds::published,
+        feeds::pending,
         // Upload flow
         upload::begin,
         upload::stream,
@@ -145,6 +148,7 @@ impl Modify for SecurityAddon {
     )),
     tags(
         (name = "public", description = "Unauthenticated browse, search and download."),
+        (name = "feeds", description = "Public Atom feeds of published samples and pending uploads."),
         (name = "upload", description = "Three-step upload flow: begin → PUT files (presigned or stream) → complete."),
         (name = "auth", description = "Password + OIDC login, session probe, logout."),
         (name = "admin", description = "Role-gated: pending review (reviewer/approver), approved-set editing (editor) and deletion (deleter), user management (admin)."),

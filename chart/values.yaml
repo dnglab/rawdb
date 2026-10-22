@@ -83,6 +83,16 @@ config:
   # be exposed on the main listener.
   docsEnabled: true
 
+  # Atom feeds at /api/feeds/published.atom and /api/feeds/pending.atom.
+  # `publicUrl` (e.g. https://rawdb.example) is used for absolute links in
+  # the feeds; empty = derive from X-Forwarded-Proto/-Host or Host.
+  publicUrl: ""
+  # Maximum number of entries per feed.
+  feedLimit: 50
+  # Feed titles shown in feed readers.
+  feedPublishedTitle: "RawDB — published samples"
+  feedPendingTitle: "RawDB — pending uploads"
+
   s3:
     bucket: ""
     # Set for non-AWS S3 backends (Garage, R2, B2, …). Empty = AWS.

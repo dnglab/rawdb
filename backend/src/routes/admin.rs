@@ -406,6 +406,10 @@ pub async fn edit_pending(
             uploaded_at: None,
             notes: req.notes.clone().filter(|s| !s.trim().is_empty()),
             special: req.special,
+            approved_at: None,
+            approved_by: None,
+            approved_initial_at: None,
+            approved_initial_by: None,
         },
         files: req
             .files
@@ -492,15 +496,13 @@ pub async fn edit_set(
     Path((maker, model)): Path<(String, String)>,
     Json(req): Json<EditSetRequest>,
 ) -> AppResult<StatusCode> {
-    // The set must already exist.
-    if state
+    // The set must already exist. Its approval record is carried forward
+    // unchanged, so an edit never adds or moves a published-feed entry.
+    let existing = state
         .db
         .get_set(&maker, &model)
         .map_err(AppError::Other)?
-        .is_none()
-    {
-        return Err(AppError::NotFound);
-    }
+        .ok_or(AppError::NotFound)?;
 
     let prefix = format!("samples/{maker}/{model}/");
 
@@ -596,6 +598,10 @@ pub async fn edit_set(
             uploaded_at: None,
             notes: req.notes.clone().filter(|s| !s.trim().is_empty()),
             special: req.special,
+            approved_at: existing.approved_at,
+            approved_by: existing.approved_by,
+            approved_initial_at: existing.approved_initial_at,
+            approved_initial_by: existing.approved_initial_by,
         },
         files: req
             .files
@@ -875,12 +881,29 @@ pub async fn approve_pending(
 
     let samples_prefix = format!("samples/{maker}/{model}/");
 
-    // Conflict resolution.
-    let already_exists = state
+    // Approval record. `approved_initial_*` is set only when this approval
+    // creates the set; merge/replace carry the existing values unchanged
+    // (even when empty), so they never produce a new published-feed entry.
+    let existing_set = state
         .db
         .get_set(&maker, &model)
-        .map_err(AppError::Other)?
-        .is_some();
+        .map_err(AppError::Other)?;
+    let now = chrono::Utc::now();
+    parsed.set.approved_at = Some(now);
+    parsed.set.approved_by = Some(auth.0.sub.clone());
+    match &existing_set {
+        Some(existing) => {
+            parsed.set.approved_initial_at = existing.approved_initial_at;
+            parsed.set.approved_initial_by = existing.approved_initial_by.clone();
+        }
+        None => {
+            parsed.set.approved_initial_at = Some(now);
+            parsed.set.approved_initial_by = Some(auth.0.sub.clone());
+        }
+    }
+
+    // Conflict resolution.
+    let already_exists = existing_set.is_some();
     // In merge mode, we need to fold the existing approved files into the
     // new meta — the S3 copy below only overwrites files at colliding
     // paths; everything else stays in the bucket but would vanish from

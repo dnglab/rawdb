@@ -76,6 +76,13 @@
         "logLevel": { "type": "string" },
         "logFormat": { "type": "string", "enum": ["text", "json"] },
         "docsEnabled": { "type": "boolean" },
+        "publicUrl": {
+          "type": "string",
+          "description": "Public base URL for absolute links in the Atom feeds. Empty = derive from request headers."
+        },
+        "feedLimit": { "type": "integer", "minimum": 1 },
+        "feedPublishedTitle": { "type": "string", "minLength": 1 },
+        "feedPendingTitle": { "type": "string", "minLength": 1 },
         "s3": {
           "type": "object",
           "additionalProperties": false,

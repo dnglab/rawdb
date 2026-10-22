@@ -25,6 +25,12 @@ data:
   RAWDB_SESSION_TTL_SECS: {{ .Values.config.sessionTtlSecs | quote }}
   RAWDB_PASSWORD_AUTH_ENABLED: {{ .Values.config.passwordAuthEnabled | quote }}
   RAWDB_DOCS_ENABLED: {{ .Values.config.docsEnabled | quote }}
+  RAWDB_FEED_LIMIT: {{ .Values.config.feedLimit | quote }}
+  RAWDB_FEED_PUBLISHED_TITLE: {{ .Values.config.feedPublishedTitle | quote }}
+  RAWDB_FEED_PENDING_TITLE: {{ .Values.config.feedPendingTitle | quote }}
+  {{- with .Values.config.publicUrl }}
+  RAWDB_PUBLIC_URL: {{ . | quote }}
+  {{- end }}
   RAWDB_S3_BUCKET: {{ .Values.config.s3.bucket | quote }}
   RAWDB_S3_REGION: {{ .Values.config.s3.region | quote }}
   RAWDB_S3_PATH_STYLE: {{ .Values.config.s3.pathStyle | quote }}

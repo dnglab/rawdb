@@ -23,6 +23,7 @@ pub mod admin;
 pub mod auth;
 pub mod errors;
 pub mod export;
+pub mod feeds;
 pub mod me;
 pub mod metrics;
 pub mod public;
@@ -34,6 +35,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(upload::router(state.config.max_upload_bytes))
         .merge(me::router())
         .merge(export::router())
+        .merge(feeds::router())
         .nest("/admin", admin::router());
 
     // Interactive OpenAPI docs. Gated by `RAWDB_DOCS_ENABLED` so locked-down

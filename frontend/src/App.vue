@@ -1,11 +1,31 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { RouterView, useRouter } from 'vue-router';
 import type { MenuItem } from 'primevue/menuitem';
+import type Menu from 'primevue/menu';
+import { useToast } from 'primevue/usetoast';
 import { useAuth } from './auth';
+import FeedIcon from './components/FeedIcon.vue';
 
 const router = useRouter();
+const toast = useToast();
 const { user, ready, isLoggedIn, canViewPending, refresh, logout } = useAuth();
+
+const feedMenu = ref<InstanceType<typeof Menu> | null>(null);
+const feedItems: MenuItem[] = [
+  { label: 'Published samples', url: '/api/feeds/published.atom' },
+  { label: 'Pending uploads', url: '/api/feeds/pending.atom' },
+];
+
+async function copyFeed(path?: string) {
+  if (!path) return;
+  try {
+    await navigator.clipboard.writeText(new URL(path, location.origin).href);
+    toast.add({ severity: 'success', summary: 'Feed URL copied', life: 2000 });
+  } catch {
+    toast.add({ severity: 'warn', summary: 'Could not copy the feed URL', life: 3000 });
+  }
+}
 
 onMounted(refresh);
 
@@ -42,6 +62,42 @@ const initial = computed(() => {
     </template>
     <template #end>
       <div class="bar-end" v-if="ready">
+        <Button
+          label="Feeds"
+          severity="secondary"
+          text
+          aria-haspopup="true"
+          aria-controls="feed-menu"
+          @click="feedMenu?.toggle($event)"
+        >
+          <template #icon="{ class: iconClass }">
+            <FeedIcon :class="iconClass" />
+          </template>
+        </Button>
+        <Menu id="feed-menu" ref="feedMenu" :model="feedItems" popup>
+          <template #item="{ item, props }">
+            <div class="feed-item">
+              <a
+                :href="item.url"
+                target="_blank"
+                rel="noopener"
+                v-bind="props.action"
+                class="feed-link"
+              >
+                <FeedIcon />
+                <span>{{ item.label }}</span>
+              </a>
+              <Button
+                icon="pi pi-copy"
+                text
+                rounded
+                size="small"
+                aria-label="Copy feed URL"
+                @click.stop="copyFeed(item.url)"
+              />
+            </div>
+          </template>
+        </Menu>
         <template v-if="isLoggedIn">
           <Avatar
             :label="initial"
@@ -125,5 +181,20 @@ const initial = computed(() => {
   color: var(--p-primary-700);
   font-weight: 600;
   cursor: pointer;
+}
+.feed-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-right: 0.25rem;
+}
+.feed-link {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  color: inherit;
+  text-decoration: none;
 }
 </style>

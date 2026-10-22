@@ -47,6 +47,10 @@ pub struct SetRow {
     pub uploaded_by: Option<String>,
     pub meta_etag: Option<String>,
     pub special: bool,
+    pub approved_at: Option<DateTime<Utc>>,
+    pub approved_by: Option<String>,
+    pub approved_initial_at: Option<DateTime<Utc>>,
+    pub approved_initial_by: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -156,6 +160,25 @@ impl Db {
     fn migrate(&self) -> Result<()> {
         let conn = self.writer.get()?;
         conn.execute_batch(SCHEMA_SQL).context("apply schema")?;
+        // Columns added after the initial schema. `CREATE TABLE IF NOT
+        // EXISTS` leaves an older cache file (e.g. on a PVC) untouched, so
+        // add any that are missing.
+        for col in [
+            "approved_at",
+            "approved_by",
+            "approved_initial_at",
+            "approved_initial_by",
+        ] {
+            let present: bool = conn.query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('sets') WHERE name = ?",
+                params![col],
+                |r| r.get(0),
+            )?;
+            if !present {
+                conn.execute_batch(&format!("ALTER TABLE sets ADD COLUMN {col} TEXT"))
+                    .with_context(|| format!("add sets.{col}"))?;
+            }
+        }
         Ok(())
     }
 
@@ -177,8 +200,9 @@ impl Db {
         let now = Utc::now();
 
         tx.execute(
-            "INSERT INTO sets(maker, model, license, notes, uploaded_at, uploaded_by, meta_etag, special, last_indexed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO sets(maker, model, license, notes, uploaded_at, uploaded_by, meta_etag, special, last_indexed_at,
+                              approved_at, approved_by, approved_initial_at, approved_initial_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(maker, model) DO UPDATE SET
                license = excluded.license,
                notes = excluded.notes,
@@ -186,7 +210,11 @@ impl Db {
                uploaded_by = excluded.uploaded_by,
                meta_etag = excluded.meta_etag,
                special = excluded.special,
-               last_indexed_at = excluded.last_indexed_at",
+               last_indexed_at = excluded.last_indexed_at,
+               approved_at = excluded.approved_at,
+               approved_by = excluded.approved_by,
+               approved_initial_at = excluded.approved_initial_at,
+               approved_initial_by = excluded.approved_initial_by",
             params![
                 maker,
                 model,
@@ -197,6 +225,10 @@ impl Db {
                 meta_etag,
                 meta.set.special as i64,
                 now.to_rfc3339(),
+                meta.set.approved_at.map(|d| d.to_rfc3339()),
+                meta.set.approved_by.as_deref(),
+                meta.set.approved_initial_at.map(|d| d.to_rfc3339()),
+                meta.set.approved_initial_by.as_deref(),
             ],
         )?;
 
@@ -287,27 +319,30 @@ impl Db {
         let conn = self.reader.get()?;
         let row = conn
             .query_row(
-                "SELECT maker, model, license, notes, uploaded_at, uploaded_by, meta_etag, special
-                 FROM sets WHERE maker = ? AND model = ?",
+                &format!("SELECT {SET_COLUMNS} FROM sets WHERE maker = ? AND model = ?"),
                 params![maker, model],
-                |r| {
-                    Ok(SetRow {
-                        maker: r.get(0)?,
-                        model: r.get(1)?,
-                        license: r.get(2)?,
-                        notes: r.get(3)?,
-                        uploaded_at: r
-                            .get::<_, Option<String>>(4)?
-                            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                            .map(|d| d.with_timezone(&Utc)),
-                        uploaded_by: r.get(5)?,
-                        meta_etag: r.get(6)?,
-                        special: r.get::<_, i64>(7)? != 0,
-                    })
-                },
+                row_to_set,
             )
             .optional()?;
         Ok(row)
+    }
+
+    /// Most recently published sets, newest first, for the published
+    /// feed. Ordered by `approved_initial_at` only: sets without it
+    /// (approved before the field existed) are left out, and later
+    /// merges/edits don't move a set. Includes non-camera sets.
+    pub fn recent_sets(&self, limit: u32) -> Result<Vec<SetRow>> {
+        let conn = self.reader.get()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {SET_COLUMNS} FROM sets
+             WHERE approved_initial_at IS NOT NULL
+             ORDER BY approved_initial_at DESC, maker, model
+             LIMIT ?"
+        ))?;
+        let rows = stmt
+            .query_map(params![limit], row_to_set)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     pub fn list_files(&self, maker: &str, model: &str) -> Result<Vec<FileRow>> {
@@ -732,6 +767,56 @@ impl Db {
         Ok(etag)
     }
 
+    /// Most recent pending uploads, newest first, for the pending feed.
+    pub fn recent_pending(&self, limit: u32) -> Result<Vec<PendingSetRow>> {
+        let conn = self.reader.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT maker, model, upload_id, license, notes, uploaded_at, uploaded_by, meta_etag
+             FROM pending_sets
+             ORDER BY uploaded_at DESC NULLS LAST, upload_id
+             LIMIT ?",
+        )?;
+        let rows = stmt
+            .query_map(params![limit], |r| {
+                Ok(PendingSetRow {
+                    maker: r.get(0)?,
+                    model: r.get(1)?,
+                    upload_id: r.get(2)?,
+                    license: r.get(3)?,
+                    notes: r.get(4)?,
+                    uploaded_at: parse_ts(r.get(5)?),
+                    uploaded_by: r.get(6)?,
+                    meta_etag: r.get(7)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Files of one pending upload, like [`Self::list_files`].
+    pub fn list_pending_files(&self, upload_id: &str) -> Result<Vec<FileRow>> {
+        let conn = self.reader.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT path, category, extension, size, license, notes, etag, sha256
+             FROM pending_files WHERE upload_id = ? ORDER BY category, path",
+        )?;
+        let rows = stmt
+            .query_map(params![upload_id], |r| {
+                Ok(FileRow {
+                    path: r.get(0)?,
+                    category: r.get(1)?,
+                    extension: r.get(2)?,
+                    size: r.get::<_, i64>(3)?.max(0) as u64,
+                    license: r.get(4)?,
+                    notes: r.get(5)?,
+                    etag: r.get(6)?,
+                    sha256: r.get(7)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn list_pending_upload_ids(&self) -> Result<Vec<String>> {
         let conn = self.reader.get()?;
         let mut stmt = conn.prepare("SELECT upload_id FROM pending_sets")?;
@@ -972,6 +1057,33 @@ impl Db {
     }
 }
 
+/// Column list matching [`row_to_set`].
+const SET_COLUMNS: &str = "maker, model, license, notes, uploaded_at, uploaded_by, meta_etag, special,
+     approved_at, approved_by, approved_initial_at, approved_initial_by";
+
+fn row_to_set(r: &rusqlite::Row) -> rusqlite::Result<SetRow> {
+    Ok(SetRow {
+        maker: r.get(0)?,
+        model: r.get(1)?,
+        license: r.get(2)?,
+        notes: r.get(3)?,
+        uploaded_at: parse_ts(r.get(4)?),
+        uploaded_by: r.get(5)?,
+        meta_etag: r.get(6)?,
+        special: r.get::<_, i64>(7)? != 0,
+        approved_at: parse_ts(r.get(8)?),
+        approved_by: r.get(9)?,
+        approved_initial_at: parse_ts(r.get(10)?),
+        approved_initial_by: r.get(11)?,
+    })
+}
+
+/// Parse an RFC 3339 timestamp column; unparsable values read as `None`.
+fn parse_ts(s: Option<String>) -> Option<DateTime<Utc>> {
+    s.and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+        .map(|d| d.with_timezone(&Utc))
+}
+
 fn row_to_user(r: &rusqlite::Row) -> rusqlite::Result<UserRow> {
     Ok(UserRow {
         sub: r.get(0)?,
@@ -1174,6 +1286,10 @@ CREATE TABLE IF NOT EXISTS sets (
     meta_etag        TEXT,
     special          INTEGER NOT NULL DEFAULT 0,
     last_indexed_at  TEXT NOT NULL,
+    approved_at          TEXT,
+    approved_by          TEXT,
+    approved_initial_at  TEXT,
+    approved_initial_by  TEXT,
     PRIMARY KEY (maker, model)
 );
 
@@ -1293,6 +1409,10 @@ mod tests {
                 uploaded_at: None,
                 notes: Some("test set".into()),
                 special: false,
+                approved_at: None,
+                approved_by: None,
+                approved_initial_at: None,
+                approved_initial_by: None,
             },
             files: vec![FileMeta {
                 path: "raw_modes/IMG_0001.cr3".into(),
@@ -1525,6 +1645,78 @@ mod tests {
         );
         db.delete_pending_by_upload_id("20260514T180000Z-a1").unwrap();
         assert_eq!(db.list_pending_upload_ids().unwrap().len(), 1);
+    }
+
+    fn ts(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn migrate_adds_approval_columns_to_old_cache() {
+        let dir = TempDir::new().unwrap();
+        // A cache file from before the approval columns existed.
+        rusqlite::Connection::open(dir.path().join("rawdb.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE sets (
+                    maker TEXT NOT NULL, model TEXT NOT NULL, license TEXT NOT NULL,
+                    notes TEXT, uploaded_at TEXT, uploaded_by TEXT, meta_etag TEXT,
+                    special INTEGER NOT NULL DEFAULT 0, last_indexed_at TEXT NOT NULL,
+                    PRIMARY KEY (maker, model)
+                );",
+            )
+            .unwrap();
+        let db = Db::open(dir.path()).unwrap();
+        let mut meta = sample_meta();
+        meta.set.approved_initial_at = Some(ts("2026-10-01T08:30:00Z"));
+        db.upsert_set(&meta, None, &[]).unwrap();
+        assert_eq!(db.recent_sets(10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn approval_fields_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::open(dir.path()).unwrap();
+        let mut meta = sample_meta();
+        meta.set.approved_at = Some(ts("2026-10-23T10:00:00Z"));
+        meta.set.approved_by = Some("github:2".into());
+        meta.set.approved_initial_at = Some(ts("2026-10-01T08:30:00Z"));
+        meta.set.approved_initial_by = Some("admin".into());
+        db.upsert_set(&meta, None, &[]).unwrap();
+        let row = db.get_set("Canon", "EOS R5").unwrap().unwrap();
+        assert_eq!(row.approved_at, meta.set.approved_at);
+        assert_eq!(row.approved_by.as_deref(), Some("github:2"));
+        assert_eq!(row.approved_initial_at, meta.set.approved_initial_at);
+        assert_eq!(row.approved_initial_by.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn recent_sets_ordered_by_initial_approval_only() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::open(dir.path()).unwrap();
+        let mut put = |model: &str, uploaded: &str, initial: Option<&str>, last: Option<&str>| {
+            let mut meta = sample_meta();
+            meta.set.model = model.into();
+            meta.set.uploaded_at = Some(ts(uploaded));
+            meta.set.approved_initial_at = initial.map(ts);
+            meta.set.approved_at = last.map(ts);
+            db.upsert_set(&meta, None, &[]).unwrap();
+        };
+        // Older upload, but approved most recently.
+        put("A", "2026-01-01T00:00:00Z", Some("2026-10-20T00:00:00Z"), None);
+        // Newer upload and a fresh merge approval, but first approved earlier.
+        put("B", "2026-09-01T00:00:00Z", Some("2026-09-02T00:00:00Z"), Some("2026-10-22T00:00:00Z"));
+        // Approved before the field existed: never in the feed.
+        put("C", "2026-10-21T00:00:00Z", None, None);
+
+        let models: Vec<String> = db
+            .recent_sets(10)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.model)
+            .collect();
+        assert_eq!(models, vec!["A", "B"]);
+        assert_eq!(db.recent_sets(1).unwrap().len(), 1);
     }
 
     #[test]

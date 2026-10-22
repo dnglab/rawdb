@@ -422,6 +422,11 @@ pub async fn complete(
     }
     // Uploaders cannot mark a set "special" — only reviewers can.
     parsed.set.special = false;
+    // The approval record is server-managed (written on approve).
+    parsed.set.approved_at = None;
+    parsed.set.approved_by = None;
+    parsed.set.approved_initial_at = None;
+    parsed.set.approved_initial_by = None;
 
     // Enforce extension denylist server-side.
     let blocked: HashSet<&str> = state

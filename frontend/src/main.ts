@@ -34,6 +34,7 @@ import Divider from 'primevue/divider';
 import Chip from 'primevue/chip';
 import AutoComplete from 'primevue/autocomplete';
 import Menubar from 'primevue/menubar';
+import Menu from 'primevue/menu';
 import Avatar from 'primevue/avatar';
 
 import App from './App.vue';
@@ -111,6 +112,7 @@ app.component('Divider', Divider);
 app.component('Chip', Chip);
 app.component('AutoComplete', AutoComplete);
 app.component('Menubar', Menubar);
+app.component('Menu', Menu);
 app.component('Avatar', Avatar);
 
 app.mount('#app');

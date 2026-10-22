@@ -37,6 +37,19 @@ pub struct SetMeta {
     /// default. Settable only by reviewers, never by uploaders.
     #[serde(default)]
     pub special: bool,
+    /// Server-managed approval record; uploaders cannot set these.
+    /// `approved_at`/`approved_by` are updated on every approval (incl.
+    /// merge/replace). `approved_initial_*` are set only when an approval
+    /// creates the set and are carried forward unchanged afterwards; the
+    /// published feed keys off them. `*_by` is the approver's session `sub`.
+    #[serde(default)]
+    pub approved_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub approved_by: Option<String>,
+    #[serde(default)]
+    pub approved_initial_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub approved_initial_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -169,6 +182,18 @@ pub fn to_toml(meta: &RawdbMeta) -> String {
     }
     if let Some(at) = meta.set.uploaded_at {
         out.push_str(&format!("uploaded_at = {}\n", q(&at.to_rfc3339())));
+    }
+    if let Some(at) = meta.set.approved_at {
+        out.push_str(&format!("approved_at = {}\n", q(&at.to_rfc3339())));
+    }
+    if let Some(by) = meta.set.approved_by.as_deref().filter(|s| !s.is_empty()) {
+        out.push_str(&format!("approved_by = {}\n", q(by)));
+    }
+    if let Some(at) = meta.set.approved_initial_at {
+        out.push_str(&format!("approved_initial_at = {}\n", q(&at.to_rfc3339())));
+    }
+    if let Some(by) = meta.set.approved_initial_by.as_deref().filter(|s| !s.is_empty()) {
+        out.push_str(&format!("approved_initial_by = {}\n", q(by)));
     }
     if let Some(n) = meta.set.notes.as_deref().filter(|s| !s.is_empty()) {
         out.push_str(&format!("notes = {}\n", q(n)));
@@ -344,6 +369,26 @@ mod tests {
         // Re-serialize and re-parse: the hash survives.
         let again = parse(&to_toml(&m)).unwrap();
         assert_eq!(again.files[0].sha256, m.files[0].sha256);
+    }
+
+    #[test]
+    fn approval_fields_round_trip_through_toml() {
+        let toml = r#"
+            [set]
+            maker = "Canon"
+            model = "EOS R5"
+            approved_at = "2026-10-23T10:00:00Z"
+            approved_by = "github:2"
+            approved_initial_at = "2026-10-01T08:30:00Z"
+            approved_initial_by = "admin"
+        "#;
+        let m = parse(toml).unwrap();
+        let again = parse(&to_toml(&m)).unwrap();
+        assert_eq!(again.set.approved_at, m.set.approved_at);
+        assert_eq!(again.set.approved_by.as_deref(), Some("github:2"));
+        assert_eq!(again.set.approved_initial_at, m.set.approved_initial_at);
+        assert_eq!(again.set.approved_initial_by.as_deref(), Some("admin"));
+        assert!(again.set.approved_initial_at.is_some());
     }
 
     #[test]

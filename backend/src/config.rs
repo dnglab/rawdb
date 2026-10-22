@@ -197,6 +197,30 @@ pub struct Config {
     #[arg(long, env = "RAWDB_GITHUB_INITIAL_ADMIN_SUB")]
     pub github_initial_admin_sub: Option<String>,
 
+    // ---- Atom feeds -----------------------------------------------------------
+    /// Public base URL (e.g. `https://rawdb.example`) used for absolute
+    /// links in the Atom feeds. When unset, it is derived per request from
+    /// `X-Forwarded-Proto` / `X-Forwarded-Host` / `Host`.
+    #[arg(long, env = "RAWDB_PUBLIC_URL")]
+    pub public_url: Option<String>,
+
+    /// Maximum number of entries in each Atom feed.
+    #[arg(
+        long,
+        env = "RAWDB_FEED_LIMIT",
+        default_value_t = 50,
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub feed_limit: u32,
+
+    /// Title of the published-samples feed (`/api/feeds/published.atom`).
+    #[arg(long, env = "RAWDB_FEED_PUBLISHED_TITLE", default_value = "RawDB — published samples")]
+    pub feed_published_title: String,
+
+    /// Title of the pending-uploads feed (`/api/feeds/pending.atom`).
+    #[arg(long, env = "RAWDB_FEED_PENDING_TITLE", default_value = "RawDB — pending uploads")]
+    pub feed_pending_title: String,
+
     // ---- OpenAPI docs ---------------------------------------------------------
     /// Serve interactive OpenAPI docs at `/docs` and the spec at
     /// `/openapi.json`. Defaults to enabled — disable in locked-down
