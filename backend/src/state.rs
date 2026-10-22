@@ -9,6 +9,7 @@ use tokio::sync::watch;
 use crate::auth_github::GithubClient;
 use crate::auth_oidc::OidcClient;
 use crate::cache::db::Db;
+use crate::cache::responses::ResponseCache;
 use crate::cache::scanner::Scanner;
 use crate::config::Config;
 use crate::events::RawdbEvents;
@@ -21,6 +22,8 @@ use crate::sync_tick::TickState;
 pub struct AppState {
     pub config: Arc<Config>,
     pub db: Db,
+    /// Rendered bodies of feeds/stats/catalog lists, invalidated by `db` writes.
+    pub responses: Arc<ResponseCache>,
     pub s3: S3,
     pub scanner: Arc<Scanner>,
     /// `None` when OIDC is not configured.
@@ -58,6 +61,8 @@ pub struct AppMetrics {
   pub errors: Counter<u64>,
   pub service_up: Gauge<u64>,
   pub scan_duration_s: Histogram<f64>,
+  /// Response-cache lookups, labelled `cache` (endpoint) and `result` (hit/miss).
+  pub response_cache: Counter<u64>,
 }
 impl AppMetrics {
   pub fn new() -> Self {
@@ -99,6 +104,10 @@ impl AppMetrics {
         .with_unit("s")
         .with_boundaries(vec![0.01, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1200.0])
         .with_description("Duration per scan")
+        .build(),
+      response_cache: meter
+        .u64_counter("rawdb.response_cache.lookups")
+        .with_description("Response cache lookups by cache and result")
         .build(),
     }
   }

@@ -18,6 +18,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -35,6 +37,39 @@ pub struct Db {
     reader: DbPool,
     /// Read-write connections — used by the scanner and admin write paths.
     writer: DbPool,
+    /// Per-domain change counters, shared by all clones.
+    gens: Arc<Generations>,
+}
+
+/// Data domains with their own change counter. Cached responses name the
+/// domains they depend on (see [`Db::stamp`]).
+#[derive(Debug, Clone, Copy)]
+pub enum Domain {
+    /// Approved sets, their files and tags.
+    Sets,
+    /// Pending uploads and their files.
+    Pending,
+    /// Scan bookkeeping (`last_full_scan_at`).
+    Scan,
+}
+
+/// Counters bumped after every committed write to a domain. They only
+/// ever increase.
+#[derive(Debug, Default)]
+struct Generations {
+    sets: AtomicU64,
+    pending: AtomicU64,
+    scan: AtomicU64,
+}
+
+impl Generations {
+    fn counter(&self, d: Domain) -> &AtomicU64 {
+        match d {
+            Domain::Sets => &self.sets,
+            Domain::Pending => &self.pending,
+            Domain::Scan => &self.scan,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +157,7 @@ impl Db {
             // on the schema DDL.
             reader: writer.clone(),
             writer,
+            gens: Arc::default(),
         };
         db.migrate()?;
 
@@ -147,7 +183,24 @@ impl Db {
         Ok(Self {
             reader,
             writer: db.writer,
+            gens: db.gens,
         })
+    }
+
+    /// Change stamp over `domains`: the sum of their counters. Counters
+    /// only increase, so the stamp differs whenever any listed domain was
+    /// written since it was last taken. Read it *before* building a
+    /// cached value so a write landing mid-build invalidates the result.
+    pub fn stamp(&self, domains: &[Domain]) -> u64 {
+        domains
+            .iter()
+            .map(|d| self.gens.counter(*d).load(Ordering::Acquire))
+            .sum()
+    }
+
+    /// Called after a write to `domain` has committed.
+    fn bump(&self, domain: Domain) {
+        self.gens.counter(domain).fetch_add(1, Ordering::Release);
     }
 
     /// Read-only connection pool. Use this for any code path that only
@@ -279,6 +332,7 @@ impl Db {
         )?;
 
         tx.commit()?;
+        self.bump(Domain::Sets);
         Ok(())
     }
 
@@ -290,6 +344,7 @@ impl Db {
         tx.execute("DELETE FROM sets_fts WHERE maker = ? AND model = ?", params![maker, model])?;
         tx.execute("DELETE FROM sets WHERE maker = ? AND model = ?", params![maker, model])?;
         tx.commit()?;
+        self.bump(Domain::Sets);
         Ok(())
     }
 
@@ -739,6 +794,7 @@ impl Db {
             )?;
         }
         tx.commit()?;
+        self.bump(Domain::Pending);
         Ok(())
     }
 
@@ -751,6 +807,7 @@ impl Db {
             params![upload_id],
         )?;
         tx.commit()?;
+        self.bump(Domain::Pending);
         Ok(())
     }
 
@@ -882,6 +939,7 @@ impl Db {
             "INSERT OR REPLACE INTO scan_state(id, last_full_scan_at) VALUES (1, ?)",
             params![when.to_rfc3339()],
         )?;
+        self.bump(Domain::Scan);
         Ok(())
     }
 
@@ -1652,6 +1710,42 @@ mod tests {
     }
 
     #[test]
+    fn writes_bump_only_their_domain() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::open(dir.path()).unwrap();
+        let snap = |db: &Db| {
+            (
+                db.stamp(&[Domain::Sets]),
+                db.stamp(&[Domain::Pending]),
+                db.stamp(&[Domain::Scan]),
+            )
+        };
+        let s0 = snap(&db);
+
+        db.upsert_set(&sample_meta(), None, &[]).unwrap();
+        db.delete_set("Canon", "EOS R5").unwrap();
+        let s1 = snap(&db);
+        assert_eq!((s1.0 - s0.0, s1.1, s1.2), (2, s0.1, s0.2));
+
+        db.upsert_pending("20260514T180000Z-a1", &sample_meta(), None, &[])
+            .unwrap();
+        db.delete_pending_by_upload_id("20260514T180000Z-a1").unwrap();
+        let s2 = snap(&db);
+        assert_eq!((s2.0, s2.1 - s1.1, s2.2), (s1.0, 2, s1.2));
+
+        db.set_last_full_scan_at(Utc::now()).unwrap();
+        db.replace_users(None, &[]).unwrap();
+        let s3 = snap(&db);
+        assert_eq!((s3.0, s3.1, s3.2 - s2.2), (s2.0, s2.1, 1));
+
+        // Clones share the counters; a combined stamp moves with any part.
+        let clone = db.clone();
+        let combined = db.stamp(&[Domain::Sets, Domain::Pending]);
+        clone.upsert_set(&sample_meta(), None, &[]).unwrap();
+        assert_eq!(db.stamp(&[Domain::Sets, Domain::Pending]), combined + 1);
+    }
+
+    #[test]
     fn migrate_adds_approval_columns_to_old_cache() {
         let dir = TempDir::new().unwrap();
         // A cache file from before the approval columns existed.
@@ -1694,7 +1788,7 @@ mod tests {
     fn recent_sets_ordered_by_initial_approval_only() {
         let dir = TempDir::new().unwrap();
         let db = Db::open(dir.path()).unwrap();
-        let mut put = |model: &str, uploaded: &str, initial: Option<&str>, last: Option<&str>| {
+        let put = |model: &str, uploaded: &str, initial: Option<&str>, last: Option<&str>| {
             let mut meta = sample_meta();
             meta.set.model = model.into();
             meta.set.uploaded_at = Some(ts(uploaded));

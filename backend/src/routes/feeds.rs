@@ -8,14 +8,14 @@
 use std::collections::HashMap;
 
 use axum::extract::State;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::HeaderMap;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
 use chrono::{DateTime, SecondsFormat, Utc};
 
-use crate::cache::db::{FileRow, PendingSetRow, SetRow};
+use crate::cache::db::{Domain, FileRow, PendingSetRow, SetRow};
+use crate::cache::responses::respond;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -26,6 +26,7 @@ pub fn router() -> Router<AppState> {
 }
 
 const ATOM_CONTENT_TYPE: &str = "application/atom+xml; charset=utf-8";
+const FEED_CACHE_CONTROL: &str = "public, max-age=300";
 
 /// Recently published sets, newest first. A set appears once, dated by its
 /// first approval; later merges and edits don't add or move entries. Sets
@@ -34,33 +35,41 @@ const ATOM_CONTENT_TYPE: &str = "application/atom+xml; charset=utf-8";
     get,
     path = "/api/feeds/published.atom",
     tag = "feeds",
-    responses((status = 200, description = "Atom feed", content_type = "application/atom+xml")),
+    responses(
+        (status = 200, description = "Atom feed", content_type = "application/atom+xml"),
+        (status = 304, description = "Not modified (matching If-None-Match)"),
+    ),
 )]
 pub async fn published(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     let base = base_url(state.config.public_url.as_deref(), &headers);
-    let mut entries = Vec::new();
-    for set in state
-        .db
-        .recent_sets(state.config.feed_limit)
-        .map_err(AppError::Other)?
-    {
-        let files = state
-            .db
-            .list_files(&set.maker, &set.model)
-            .map_err(AppError::Other)?;
-        let tags = state
-            .db
-            .file_tags(&set.maker, &set.model)
-            .map_err(AppError::Other)?;
-        entries.extend(published_entry(&base, &set, &files, &tags));
-    }
-    let self_url = format!("{base}/api/feeds/published.atom");
-    Ok(atom_response(render_feed(
-        &state.config.feed_published_title,
-        &self_url,
+    let cached = state.responses.get_or_build(
+        "feed_published",
         &base,
-        &entries,
-    )))
+        state.db.stamp(&[Domain::Sets]),
+        ATOM_CONTENT_TYPE,
+        || {
+            let mut entries = Vec::new();
+            for set in state
+                .db
+                .recent_sets(state.config.feed_limit)
+                .map_err(AppError::Other)?
+            {
+                let files = state
+                    .db
+                    .list_files(&set.maker, &set.model)
+                    .map_err(AppError::Other)?;
+                let tags = state
+                    .db
+                    .file_tags(&set.maker, &set.model)
+                    .map_err(AppError::Other)?;
+                entries.extend(published_entry(&base, &set, &files, &tags));
+            }
+            let self_url = format!("{base}/api/feeds/published.atom");
+            Ok(render_feed(&state.config.feed_published_title, &self_url, &base, &entries)
+                .into_bytes())
+        },
+    )?;
+    Ok(respond(&cached, &headers, FEED_CACHE_CONTROL))
 }
 
 /// Recently uploaded sets waiting for review, newest first. Entries link
@@ -69,40 +78,37 @@ pub async fn published(State(state): State<AppState>, headers: HeaderMap) -> App
     get,
     path = "/api/feeds/pending.atom",
     tag = "feeds",
-    responses((status = 200, description = "Atom feed", content_type = "application/atom+xml")),
+    responses(
+        (status = 200, description = "Atom feed", content_type = "application/atom+xml"),
+        (status = 304, description = "Not modified (matching If-None-Match)"),
+    ),
 )]
 pub async fn pending(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     let base = base_url(state.config.public_url.as_deref(), &headers);
-    let mut entries = Vec::new();
-    for row in state
-        .db
-        .recent_pending(state.config.feed_limit)
-        .map_err(AppError::Other)?
-    {
-        let files = state
-            .db
-            .list_pending_files(&row.upload_id)
-            .map_err(AppError::Other)?;
-        entries.push(pending_entry(&base, &row, &files));
-    }
-    let self_url = format!("{base}/api/feeds/pending.atom");
-    Ok(atom_response(render_feed(
-        &state.config.feed_pending_title,
-        &self_url,
+    let cached = state.responses.get_or_build(
+        "feed_pending",
         &base,
-        &entries,
-    )))
-}
-
-fn atom_response(body: String) -> Response {
-    (
-        [
-            (CONTENT_TYPE, ATOM_CONTENT_TYPE),
-            (CACHE_CONTROL, "public, max-age=300"),
-        ],
-        body,
-    )
-        .into_response()
+        state.db.stamp(&[Domain::Pending]),
+        ATOM_CONTENT_TYPE,
+        || {
+            let mut entries = Vec::new();
+            for row in state
+                .db
+                .recent_pending(state.config.feed_limit)
+                .map_err(AppError::Other)?
+            {
+                let files = state
+                    .db
+                    .list_pending_files(&row.upload_id)
+                    .map_err(AppError::Other)?;
+                entries.push(pending_entry(&base, &row, &files));
+            }
+            let self_url = format!("{base}/api/feeds/pending.atom");
+            Ok(render_feed(&state.config.feed_pending_title, &self_url, &base, &entries)
+                .into_bytes())
+        },
+    )?;
+    Ok(respond(&cached, &headers, FEED_CACHE_CONTROL))
 }
 
 // ---- entries ----------------------------------------------------------------

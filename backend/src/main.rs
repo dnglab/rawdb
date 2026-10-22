@@ -24,6 +24,7 @@ mod sync_tick;
 mod users;
 
 use cache::db::Db;
+use cache::responses::ResponseCache;
 use cache::scanner::Scanner;
 use config::Config;
 use s3::S3;
@@ -122,6 +123,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         config: Arc::new(config),
         db,
+        responses: Arc::new(ResponseCache::new(metrics.response_cache.clone())),
         s3,
         scanner,
         oidc: oidc.map(Arc::new),

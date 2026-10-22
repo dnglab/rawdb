@@ -1,14 +1,15 @@
 //! Public (unauthenticated) API: browse, search, set detail, download.
 
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::cache::db::{SetQuery, SetSummary, SortField, SortOrder};
+use crate::cache::db::{Domain, SetQuery, SetSummary, SortField, SortOrder};
+use crate::cache::responses::{json, respond, JSON, NO_CACHE};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -327,9 +328,23 @@ pub async fn set_detail(
     get,
     path = "/api/tags",
     tag = "public",
-    responses((status = 200, body = TagsResponse)),
+    responses(
+        (status = 200, body = TagsResponse),
+        (status = 304, description = "Not modified (matching If-None-Match)"),
+    ),
 )]
-pub async fn tags(State(state): State<AppState>) -> AppResult<Json<TagsResponse>> {
+pub async fn tags(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    let cached = state.responses.get_or_build(
+        "tags",
+        "",
+        state.db.stamp(&[Domain::Sets]),
+        JSON,
+        || json(&tag_list(&state)?),
+    )?;
+    Ok(respond(&cached, &headers, NO_CACHE))
+}
+
+fn tag_list(state: &AppState) -> AppResult<TagsResponse> {
     let rows = state.db.tag_counts().map_err(AppError::Other)?;
     // Curated tags (case-insensitive lookup) — keep their canonical
     // spelling from config so admins control casing.
@@ -369,7 +384,7 @@ pub async fn tags(State(state): State<AppState>) -> AppResult<Json<TagsResponse>
         }
     }
 
-    Ok(Json(TagsResponse { tags: out }))
+    Ok(TagsResponse { tags: out })
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -385,6 +400,15 @@ fn include_special(p: &CatalogParams) -> bool {
     matches!(p.include_special.as_deref(), Some("1") | Some("true"))
 }
 
+/// Response-cache variant for the maker/model catalog lists.
+fn catalog_variant(include_special: bool) -> &'static str {
+    if include_special {
+        "special"
+    } else {
+        "cameras"
+    }
+}
+
 /// Distinct camera makers from approved sets, for the upload form's
 /// maker picker (the user may still type a new one). Non-camera "special"
 /// sets are excluded unless `?include_special=1`.
@@ -393,17 +417,28 @@ fn include_special(p: &CatalogParams) -> bool {
     path = "/api/makers",
     tag = "public",
     params(CatalogParams),
-    responses((status = 200, body = MakersResponse)),
+    responses(
+        (status = 200, body = MakersResponse),
+        (status = 304, description = "Not modified (matching If-None-Match)"),
+    ),
 )]
 pub async fn makers(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<CatalogParams>,
-) -> AppResult<Json<MakersResponse>> {
-    let makers = state
-        .db
-        .distinct_makers(include_special(&params))
-        .map_err(AppError::Other)?;
-    Ok(Json(MakersResponse { makers }))
+) -> AppResult<Response> {
+    let special = include_special(&params);
+    let cached = state.responses.get_or_build(
+        "makers",
+        catalog_variant(special),
+        state.db.stamp(&[Domain::Sets]),
+        JSON,
+        || {
+            let makers = state.db.distinct_makers(special).map_err(AppError::Other)?;
+            json(&MakersResponse { makers })
+        },
+    )?;
+    Ok(respond(&cached, &headers, NO_CACHE))
 }
 
 /// Distinct `(maker, model)` pairs from approved sets, for the upload
@@ -414,39 +449,66 @@ pub async fn makers(
     path = "/api/models",
     tag = "public",
     params(CatalogParams),
-    responses((status = 200, body = ModelsResponse)),
+    responses(
+        (status = 200, body = ModelsResponse),
+        (status = 304, description = "Not modified (matching If-None-Match)"),
+    ),
 )]
 pub async fn models(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<CatalogParams>,
-) -> AppResult<Json<ModelsResponse>> {
-    let pairs = state
-        .db
-        .distinct_maker_models(include_special(&params))
-        .map_err(AppError::Other)?;
-    let models: Vec<MakerModel> = pairs
-        .into_iter()
-        .map(|(maker, model)| MakerModel { maker, model })
-        .collect();
-    Ok(Json(ModelsResponse { models }))
+) -> AppResult<Response> {
+    let special = include_special(&params);
+    let cached = state.responses.get_or_build(
+        "models",
+        catalog_variant(special),
+        state.db.stamp(&[Domain::Sets]),
+        JSON,
+        || {
+            let models: Vec<MakerModel> = state
+                .db
+                .distinct_maker_models(special)
+                .map_err(AppError::Other)?
+                .into_iter()
+                .map(|(maker, model)| MakerModel { maker, model })
+                .collect();
+            json(&ModelsResponse { models })
+        },
+    )?;
+    Ok(respond(&cached, &headers, NO_CACHE))
 }
 
 #[utoipa::path(
     get,
     path = "/api/stats",
     tag = "public",
-    responses((status = 200, body = StatsResponse)),
+    responses(
+        (status = 200, body = StatsResponse),
+        (status = 304, description = "Not modified (matching If-None-Match)"),
+    ),
 )]
-pub async fn stats(State(state): State<AppState>) -> AppResult<Json<StatsResponse>> {
-    Ok(Json(StatsResponse {
-        models: state.db.count_models().map_err(AppError::Other)?,
-        special: state.db.count_special().map_err(AppError::Other)?,
-        pending: state.db.count_pending().map_err(AppError::Other)?,
-        files: state.db.count_files().map_err(AppError::Other)?,
-        last_full_scan_at: state.db.last_full_scan_at().map_err(AppError::Other)?,
-        ready: state.is_ready(),
-        max_upload_bytes: state.config.max_upload_bytes,
-    }))
+pub async fn stats(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    // `ready` is not DB data; it flips once, so it is part of the key.
+    let ready = state.is_ready();
+    let cached = state.responses.get_or_build(
+        "stats",
+        if ready { "ready" } else { "scanning" },
+        state.db.stamp(&[Domain::Sets, Domain::Pending, Domain::Scan]),
+        JSON,
+        || {
+            json(&StatsResponse {
+                models: state.db.count_models().map_err(AppError::Other)?,
+                special: state.db.count_special().map_err(AppError::Other)?,
+                pending: state.db.count_pending().map_err(AppError::Other)?,
+                files: state.db.count_files().map_err(AppError::Other)?,
+                last_full_scan_at: state.db.last_full_scan_at().map_err(AppError::Other)?,
+                ready,
+                max_upload_bytes: state.config.max_upload_bytes,
+            })
+        },
+    )?;
+    Ok(respond(&cached, &headers, NO_CACHE))
 }
 
 /// Distinct `(maker, model)` pairs currently waiting in the review queue.
@@ -456,17 +518,29 @@ pub async fn stats(State(state): State<AppState>) -> AppResult<Json<StatsRespons
     get,
     path = "/api/pending",
     tag = "public",
-    responses((status = 200, body = ModelsResponse)),
+    responses(
+        (status = 200, body = ModelsResponse),
+        (status = 304, description = "Not modified (matching If-None-Match)"),
+    ),
 )]
-pub async fn pending(State(state): State<AppState>) -> AppResult<Json<ModelsResponse>> {
-    let models: Vec<MakerModel> = state
-        .db
-        .pending_maker_models()
-        .map_err(AppError::Other)?
-        .into_iter()
-        .map(|(maker, model)| MakerModel { maker, model })
-        .collect();
-    Ok(Json(ModelsResponse { models }))
+pub async fn pending(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    let cached = state.responses.get_or_build(
+        "pending_names",
+        "",
+        state.db.stamp(&[Domain::Pending]),
+        JSON,
+        || {
+            let models: Vec<MakerModel> = state
+                .db
+                .pending_maker_models()
+                .map_err(AppError::Other)?
+                .into_iter()
+                .map(|(maker, model)| MakerModel { maker, model })
+                .collect();
+            json(&ModelsResponse { models })
+        },
+    )?;
+    Ok(respond(&cached, &headers, NO_CACHE))
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
