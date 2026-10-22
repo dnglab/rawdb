@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a8ee6"/>
+      <stop offset="1" stop-color="#b5dcfb"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="400" fill="url(#sky)"/>
+  <g fill="#ffffff">
+    <ellipse cx="90" cy="50" rx="40" ry="14"/>
+    <ellipse cx="115" cy="40" rx="26" ry="16"/>
+    <ellipse cx="470" cy="45" rx="46" ry="15"/>
+    <ellipse cx="500" cy="35" rx="28" ry="17"/>
+  </g>
+  <!-- houses -->
+  <rect x="0" y="130" width="100" height="200" fill="#e53935"/>
+  <path d="M-5 130 L50 90 L105 130 Z" fill="#8d3b2f"/>
+  <rect x="100" y="110" width="95" height="220" fill="#fdd835"/>
+  <path d="M95 110 L147 70 L200 110 Z" fill="#8d3b2f"/>
+  <rect x="195" y="140" width="105" height="190" fill="#1e88e5"/>
+  <path d="M190 140 L247 100 L305 140 Z" fill="#6d4c41"/>
+  <rect x="300" y="100" width="95" height="230" fill="#43a047"/>
+  <path d="M295 100 L347 62 L400 100 Z" fill="#8d3b2f"/>
+  <rect x="395" y="125" width="100" height="205" fill="#fb8c00"/>
+  <path d="M390 125 L445 85 L500 125 Z" fill="#6d4c41"/>
+  <rect x="495" y="115" width="105" height="215" fill="#ec407a"/>
+  <path d="M490 115 L547 75 L605 115 Z" fill="#8d3b2f"/>
+  <!-- windows -->
+  <g fill="#e3f2fd" stroke="#ffffff" stroke-width="3">
+    <rect x="18" y="155" width="26" height="32"/><rect x="58" y="155" width="26" height="32"/>
+    <rect x="18" y="210" width="26" height="32"/><rect x="58" y="210" width="26" height="32"/>
+    <rect x="118" y="135" width="24" height="32"/><rect x="155" y="135" width="24" height="32"/>
+    <rect x="118" y="190" width="24" height="32"/><rect x="155" y="190" width="24" height="32"/>
+    <rect x="213" y="165" width="28" height="30"/><rect x="255" y="165" width="28" height="30"/>
+    <rect x="213" y="215" width="28" height="30"/><rect x="255" y="215" width="28" height="30"/>
+    <rect x="315" y="125" width="26" height="32"/><rect x="355" y="125" width="26" height="32"/>
+    <rect x="315" y="180" width="26" height="32"/><rect x="355" y="180" width="26" height="32"/>
+    <rect x="412" y="150" width="28" height="32"/><rect x="452" y="150" width="28" height="32"/>
+    <rect x="412" y="205" width="28" height="32"/><rect x="452" y="205" width="28" height="32"/>
+    <rect x="512" y="140" width="28" height="32"/><rect x="555" y="140" width="28" height="32"/>
+    <rect x="512" y="195" width="28" height="32"/><rect x="555" y="195" width="28" height="32"/>
+  </g>
+  <!-- doors -->
+  <g fill="#5d4037">
+    <rect x="35" y="270" width="30" height="60" rx="3"/>
+    <rect x="132" y="262" width="30" height="68" rx="3"/>
+    <rect x="232" y="268" width="30" height="62" rx="3"/>
+    <rect x="333" y="262" width="30" height="68" rx="3"/>
+    <rect x="430" y="266" width="30" height="64" rx="3"/>
+    <rect x="532" y="264" width="30" height="66" rx="3"/>
+  </g>
+  <!-- flower boxes -->
+  <g fill="#c62828">
+    <circle cx="126" cy="230" r="4"/><circle cx="134" cy="230" r="4"/><circle cx="163" cy="230" r="4"/><circle cx="171" cy="230" r="4"/>
+    <circle cx="420" cy="245" r="4"/><circle cx="430" cy="245" r="4"/><circle cx="462" cy="245" r="4"/><circle cx="472" cy="245" r="4"/>
+  </g>
+  <!-- sidewalk and empty street -->
+  <rect y="330" width="600" height="20" fill="#bdbdbd"/>
+  <rect y="350" width="600" height="50" fill="#616161"/>
+  <g fill="#f5f5f5">
+    <rect x="20" y="372" width="50" height="6"/><rect x="130" y="372" width="50" height="6"/>
+    <rect x="240" y="372" width="50" height="6"/><rect x="350" y="372" width="50" height="6"/>
+    <rect x="460" y="372" width="50" height="6"/><rect x="570" y="372" width="50" height="6"/>
+  </g>
+</svg>

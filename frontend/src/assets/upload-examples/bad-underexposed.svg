@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f80d8"/>
+      <stop offset="1" stop-color="#a9d6fb"/>
+    </linearGradient>
+    <linearGradient id="meadow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6cbf3c"/>
+      <stop offset="1" stop-color="#3f9a2a"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="400" fill="url(#sky)"/>
+  <circle cx="500" cy="70" r="34" fill="#fff6c4"/>
+  <circle cx="500" cy="70" r="26" fill="#ffe680"/>
+  <g fill="#ffffff">
+    <ellipse cx="120" cy="80" rx="50" ry="20"/>
+    <ellipse cx="155" cy="66" rx="34" ry="24"/>
+    <ellipse cx="95" cy="70" rx="28" ry="18"/>
+    <ellipse cx="330" cy="120" rx="44" ry="16"/>
+    <ellipse cx="360" cy="108" rx="30" ry="20"/>
+    <ellipse cx="305" cy="112" rx="22" ry="14"/>
+  </g>
+  <path d="M0 230 L90 150 L160 200 L250 120 L350 210 L430 160 L520 215 L600 175 L600 260 L0 260 Z" fill="#7d93b8"/>
+  <path d="M250 120 L228 140 L240 138 L250 148 L262 136 L272 138 Z" fill="#f2f5fa"/>
+  <path d="M90 150 L74 165 L86 162 L94 170 L104 162 Z" fill="#f2f5fa"/>
+  <path d="M0 250 Q150 200 300 240 T600 230 L600 400 L0 400 Z" fill="#8fce4f"/>
+  <path d="M0 290 Q200 250 380 285 T600 280 L600 400 L0 400 Z" fill="url(#meadow)"/>
+  <g>
+    <rect x="455" y="200" width="10" height="55" fill="#6b4423"/>
+    <circle cx="460" cy="190" r="30" fill="#2e7d32"/>
+    <circle cx="442" cy="205" r="20" fill="#388e3c"/>
+    <circle cx="480" cy="205" r="20" fill="#388e3c"/>
+    <rect x="70" y="215" width="8" height="45" fill="#6b4423"/>
+    <circle cx="74" cy="205" r="24" fill="#33852f"/>
+    <circle cx="60" cy="218" r="15" fill="#2e7d32"/>
+    <circle cx="88" cy="218" r="15" fill="#2e7d32"/>
+  </g>
+  <g fill="#e53935">
+    <circle cx="40" cy="330" r="6"/><circle cx="130" cy="355" r="6"/><circle cx="210" cy="320" r="5"/>
+    <circle cx="330" cy="365" r="6"/><circle cx="440" cy="330" r="5"/><circle cx="540" cy="360" r="6"/>
+  </g>
+  <g fill="#fdd835">
+    <circle cx="80" cy="370" r="5"/><circle cx="175" cy="335" r="5"/><circle cx="270" cy="375" r="6"/>
+    <circle cx="380" cy="320" r="5"/><circle cx="490" cy="380" r="6"/><circle cx="575" cy="320" r="5"/>
+  </g>
+  <g fill="#8e44ad">
+    <circle cx="20" cy="385" r="5"/><circle cx="240" cy="345" r="5"/><circle cx="300" cy="320" r="4"/>
+    <circle cx="410" cy="375" r="5"/><circle cx="510" cy="325" r="4"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="105" cy="320" r="4"/><circle cx="190" cy="385" r="4"/><circle cx="355" cy="340" r="4"/>
+    <circle cx="465" cy="355" r="4"/><circle cx="590" cy="385" r="4"/>
+  </g>
+  <g fill="#ff8f00">
+    <circle cx="60" cy="345" r="4"/><circle cx="155" cy="380" r="4"/><circle cx="395" cy="350" r="4"/>
+    <circle cx="560" cy="340" r="4"/>
+  </g>
+  <!-- underexposed: shadows crushed, high-ISO noise -->
+  <defs>
+    <filter id="noise">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+  </defs>
+  <rect width="600" height="400" fill="#04060c" opacity="0.84"/>
+  <rect width="600" height="400" filter="url(#noise)" opacity="0.12"/>
+</svg>

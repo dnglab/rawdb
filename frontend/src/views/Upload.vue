@@ -1,14 +1,82 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { createSHA256, type IHasher } from 'hash-wasm';
 import { api, type FilePlan } from '../api';
 import PageHeader from '../components/PageHeader.vue';
 import TagInput from '../components/TagInput.vue';
+// Pre-rendered to HTML at build time by the markdown plugin in
+// vite.config.ts. Rules follow dnglab's CONTRIBUTE_SAMPLES.md.
+import guidelinesHtml from '../upload-guidelines.inc.md';
+import cameraSetsHtml from '../upload-camera-sets.inc.md';
+import goodLandscape from '../assets/upload-examples/good-landscape.svg';
+import goodFruitBasket from '../assets/upload-examples/good-fruit-basket.svg';
+import goodColorfulStreet from '../assets/upload-examples/good-colorful-street.svg';
+import goodGarden from '../assets/upload-examples/good-garden.svg';
+import badColorChecker from '../assets/upload-examples/bad-color-checker.svg';
+import badPeopleCars from '../assets/upload-examples/bad-people-cars.svg';
+import badUnderexposed from '../assets/upload-examples/bad-underexposed.svg';
+import badOverexposed from '../assets/upload-examples/bad-overexposed.svg';
 
 // All uploads land under the raw_modes category; it is no longer
 // user-editable.
 const CATEGORY = 'raw_modes';
+
+// Illustrated do/don't scenes shown in the guidelines panel.
+const exampleGroups = [
+  {
+    title: 'Good examples',
+    kind: 'good',
+    icon: null,
+    items: [
+      { src: goodLandscape, caption: 'Landscape with sky and flowers' },
+      { src: goodFruitBasket, caption: 'Colorful fruit basket' },
+      { src: goodColorfulStreet, caption: 'Colorful houses, empty street' },
+      { src: goodGarden, caption: 'Trees and plants in daylight' },
+    ],
+  },
+  {
+    title: 'Bad examples',
+    kind: 'bad',
+    icon: 'pi pi-times',
+    items: [
+      { src: badColorChecker, caption: 'Color checker card' },
+      { src: badPeopleCars, caption: 'People and cars' },
+      { src: badUnderexposed, caption: 'Underexposed' },
+      { src: badOverexposed, caption: 'Overexposed' },
+    ],
+  },
+];
+
+// The guidelines panel starts expanded; once a user collapses it, it
+// stays collapsed on later visits. Storage can be unavailable (private
+// mode, blocked site data) — then it just starts expanded.
+const GUIDE_COLLAPSED_KEY = 'rawdb.uploadGuideCollapsed';
+
+function readGuideCollapsed(): boolean {
+  try {
+    return localStorage.getItem(GUIDE_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+const guideCollapsed = ref(readGuideCollapsed());
+watch(guideCollapsed, (v) => {
+  try {
+    localStorage.setItem(GUIDE_COLLAPSED_KEY, v ? '1' : '0');
+  } catch {
+    /* preference is best-effort */
+  }
+});
+
+// The whole panel header toggles, not just PrimeVue's small button.
+// Clicks on the button itself are left to PrimeVue so they don't
+// toggle twice.
+function onGuideHeaderClick(e: MouseEvent) {
+  if ((e.target as HTMLElement).closest('button')) return;
+  guideCollapsed.value = !guideCollapsed.value;
+}
 
 interface FileRow {
   file: File;
@@ -578,6 +646,45 @@ async function submit() {
       subtitle="Contribute RAW files for decoder testing"
     />
 
+    <Panel
+      v-if="phase !== 'done'"
+      v-model:collapsed="guideCollapsed"
+      header="Submission guidelines"
+      toggleable
+      class="guide mb"
+      :pt="{ header: { onClick: onGuideHeaderClick } }"
+    >
+      <div class="md" v-html="guidelinesHtml" />
+
+      <div class="example-groups">
+        <div v-for="g in exampleGroups" :key="g.kind">
+          <h3>{{ g.title }}</h3>
+          <div class="examples">
+            <figure
+              v-for="ex in g.items"
+              :key="ex.src"
+              :class="['example', g.kind]"
+            >
+              <div class="thumb">
+                <img
+                  :src="ex.src"
+                  :alt="`${g.title}: ${ex.caption}`"
+                  width="600"
+                  height="400"
+                  loading="lazy"
+                />
+                <span v-if="g.icon" class="badge"><i :class="g.icon" /></span>
+              </div>
+              <figcaption>{{ ex.caption }}</figcaption>
+            </figure>
+          </div>
+        </div>
+      </div>
+
+      <h3>Required shots per camera maker</h3>
+      <div class="md" v-html="cameraSetsHtml" />
+    </Panel>
+
     <Card v-if="phase === 'done'">
       <template #content>
         <Message severity="success" :closable="false">
@@ -858,8 +965,95 @@ async function submit() {
   margin-top: 0.5rem;
   font-size: 0.8rem;
 }
+/* Guidelines panel: rendered markdown plus the example grid. */
+.guide :deep(.p-panel-header) {
+  cursor: pointer;
+  user-select: none;
+}
+.guide h3,
+.md :deep(h3) {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 1rem;
+}
+.md :deep(p),
+.md :deep(ul) {
+  margin: 0.5rem 0;
+}
+.md :deep(p):first-child {
+  margin-top: 0;
+}
+.md :deep(details) {
+  border: 1px solid var(--p-surface-200);
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem;
+  margin: 0.4rem 0;
+}
+.md :deep(summary) {
+  cursor: pointer;
+  font-weight: 600;
+}
+/* Good | Bad side by side, each a 2x2 grid; capped so thumbnails stay small. */
+.example-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 1.5rem;
+  max-width: 760px;
+}
+.examples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.example {
+  margin: 0;
+}
+.thumb {
+  position: relative;
+}
+.example img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 3 / 2;
+  border-radius: 6px;
+  border: 2px solid var(--p-surface-200);
+}
+.example.good img {
+  border-color: var(--p-green-500);
+}
+.example.bad img {
+  border-color: var(--p-red-500);
+}
+/* Large, centered and translucent so it reads as "don't", not as a
+   close button. */
+.example .badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.9rem;
+  height: 3.9rem;
+  border-radius: 50%;
+  background: var(--p-red-500);
+  color: #ffffff;
+  /* PrimeVue sizes .pi via this token; a parent font-size is ignored. */
+  --p-icon-size: 3rem;
+  opacity: 0.7;
+}
+.example figcaption {
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  line-height: 1.25;
+  color: var(--p-text-muted-color);
+}
 @media (max-width: 640px) {
   .grid {
+    grid-template-columns: 1fr;
+  }
+  .example-groups {
     grid-template-columns: 1fr;
   }
 }

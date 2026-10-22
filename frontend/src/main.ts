@@ -75,6 +75,13 @@ const RawdbPreset = definePreset(Aura, {
       },
     },
   },
+  components: {
+    // Panels default to the smaller content radius; match Card so they
+    // look alike when stacked on one page.
+    panel: {
+      root: { borderRadius: '{border.radius.xl}' },
+    },
+  },
 });
 
 const app = createApp(App);

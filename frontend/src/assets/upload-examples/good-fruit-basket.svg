@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400">
+  <defs>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef3f7"/>
+      <stop offset="1" stop-color="#d9e4ec"/>
+    </linearGradient>
+    <linearGradient id="table" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b9864f"/>
+      <stop offset="1" stop-color="#8d5f31"/>
+    </linearGradient>
+    <linearGradient id="basket" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d6a560"/>
+      <stop offset="1" stop-color="#a8733a"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="400" fill="url(#wall)"/>
+  <rect x="380" y="30" width="170" height="150" fill="#9fd3ff" stroke="#ffffff" stroke-width="10"/>
+  <line x1="465" y1="30" x2="465" y2="180" stroke="#ffffff" stroke-width="6"/>
+  <line x1="380" y1="105" x2="550" y2="105" stroke="#ffffff" stroke-width="6"/>
+  <rect y="290" width="600" height="110" fill="url(#table)"/>
+  <ellipse cx="300" cy="330" rx="200" ry="18" fill="#000" opacity="0.15"/>
+  <!-- bananas -->
+  <g stroke="#b8860b" stroke-width="2">
+    <path d="M170 220 Q230 270 320 200 Q240 245 180 205 Z" fill="#ffd93b"/>
+    <path d="M180 200 Q250 245 330 175 Q250 225 188 186 Z" fill="#ffe14f"/>
+  </g>
+  <!-- grapes -->
+  <g fill="#6a1b9a">
+    <circle cx="360" cy="200" r="13"/><circle cx="385" cy="200" r="13"/><circle cx="410" cy="205" r="13"/>
+    <circle cx="372" cy="222" r="13"/><circle cx="397" cy="224" r="13"/><circle cx="385" cy="246" r="13"/>
+  </g>
+  <g fill="#9c4dcc">
+    <circle cx="356" cy="196" r="4"/><circle cx="381" cy="196" r="4"/><circle cx="406" cy="201" r="4"/>
+    <circle cx="368" cy="218" r="4"/><circle cx="393" cy="220" r="4"/>
+  </g>
+  <path d="M385 188 Q390 170 400 165" stroke="#5d4037" stroke-width="4" fill="none"/>
+  <path d="M398 170 Q420 160 430 175 Q412 180 398 170 Z" fill="#43a047"/>
+  <!-- oranges and apples -->
+  <circle cx="230" cy="245" r="32" fill="#fb8c00"/>
+  <circle cx="220" cy="235" r="8" fill="#ffb74d"/>
+  <circle cx="300" cy="240" r="34" fill="#d32f2f"/>
+  <circle cx="288" cy="228" r="9" fill="#ef5350"/>
+  <path d="M300 208 Q302 196 308 190" stroke="#5d4037" stroke-width="4" fill="none"/>
+  <path d="M306 196 Q322 186 330 198 Q316 204 306 196 Z" fill="#43a047"/>
+  <circle cx="440" cy="250" r="28" fill="#7cb342"/>
+  <circle cx="432" cy="240" r="7" fill="#aed581"/>
+  <circle cx="160" cy="255" r="26" fill="#fb8c00"/>
+  <!-- basket -->
+  <path d="M120 255 L480 255 L450 330 L150 330 Z" fill="url(#basket)"/>
+  <g stroke="#8d5a28" stroke-width="3" fill="none">
+    <path d="M125 270 L475 270"/><path d="M132 288 L468 288"/><path d="M140 306 L460 306"/>
+    <path d="M180 255 L190 330"/><path d="M240 255 L245 330"/><path d="M300 255 L300 330"/>
+    <path d="M360 255 L355 330"/><path d="M420 255 L410 330"/>
+  </g>
+  <rect x="112" y="248" width="376" height="14" rx="7" fill="#c48a45"/>
+</svg>

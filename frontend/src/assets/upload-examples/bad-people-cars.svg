@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5a9ee0"/>
+      <stop offset="1" stop-color="#c3e2fb"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="400" fill="url(#sky)"/>
+  <!-- houses -->
+  <rect x="0" y="90" width="150" height="200" fill="#c9b79c"/>
+  <rect x="150" y="70" width="140" height="220" fill="#a8bccc"/>
+  <rect x="290" y="100" width="160" height="190" fill="#d9c27e"/>
+  <rect x="450" y="80" width="150" height="210" fill="#b5a3c4"/>
+  <g fill="#e8eef3" stroke="#ffffff" stroke-width="3">
+    <rect x="25" y="115" width="35" height="40"/><rect x="90" y="115" width="35" height="40"/>
+    <rect x="175" y="95" width="35" height="40"/><rect x="235" y="95" width="35" height="40"/>
+    <rect x="315" y="125" width="35" height="40"/><rect x="390" y="125" width="35" height="40"/>
+    <rect x="475" y="105" width="35" height="40"/><rect x="540" y="105" width="35" height="40"/>
+  </g>
+  <g fill="#6d5a4a">
+    <rect x="60" y="225" width="32" height="65"/><rect x="205" y="225" width="32" height="65"/>
+    <rect x="355" y="225" width="32" height="65"/><rect x="505" y="225" width="32" height="65"/>
+  </g>
+  <rect y="290" width="600" height="30" fill="#bdbdbd"/>
+  <rect y="320" width="600" height="80" fill="#5f5f5f"/>
+  <!-- people -->
+  <g>
+    <circle cx="130" cy="225" r="11" fill="#e0ac69"/>
+    <rect x="118" y="238" width="24" height="38" rx="9" fill="#d84315"/>
+    <rect x="120" y="272" width="8" height="26" fill="#283593"/>
+    <rect x="132" y="272" width="8" height="26" fill="#283593"/>
+    <circle cx="165" cy="228" r="10" fill="#8d5524"/>
+    <rect x="154" y="240" width="22" height="35" rx="8" fill="#00897b"/>
+    <rect x="156" y="271" width="7" height="25" fill="#37474f"/>
+    <rect x="167" y="271" width="7" height="25" fill="#37474f"/>
+    <circle cx="300" cy="223" r="11" fill="#f1c27d"/>
+    <rect x="288" y="236" width="24" height="40" rx="9" fill="#6a1b9a"/>
+    <rect x="290" y="272" width="8" height="26" fill="#212121"/>
+    <rect x="302" y="272" width="8" height="26" fill="#212121"/>
+    <circle cx="470" cy="226" r="10" fill="#c68642"/>
+    <rect x="459" y="238" width="22" height="37" rx="8" fill="#fbc02d"/>
+    <rect x="461" y="271" width="7" height="25" fill="#455a64"/>
+    <rect x="472" y="271" width="7" height="25" fill="#455a64"/>
+  </g>
+  <!-- cars -->
+  <g>
+    <path d="M30 360 L40 330 Q50 315 75 312 L110 300 Q125 295 160 295 L200 297 Q220 300 235 315 L255 325 Q270 330 270 345 L270 360 Z" fill="#c62828"/>
+    <path d="M118 304 L158 300 L200 302 L222 318 L110 318 Z" fill="#cfe8f7"/>
+    <line x1="165" y1="300" x2="165" y2="318" stroke="#c62828" stroke-width="4"/>
+    <circle cx="80" cy="362" r="20" fill="#212121"/><circle cx="80" cy="362" r="8" fill="#9e9e9e"/>
+    <circle cx="225" cy="362" r="20" fill="#212121"/><circle cx="225" cy="362" r="8" fill="#9e9e9e"/>
+    <rect x="254" y="335" width="16" height="8" fill="#fff59d"/>
+    <path d="M330 360 L335 325 Q340 312 360 310 L400 296 Q415 292 450 292 L500 294 Q520 297 535 312 L560 322 Q575 328 575 345 L575 360 Z" fill="#1565c0"/>
+    <path d="M405 302 L450 297 L500 299 L524 316 L398 316 Z" fill="#cfe8f7"/>
+    <line x1="455" y1="297" x2="455" y2="316" stroke="#1565c0" stroke-width="4"/>
+    <circle cx="380" cy="362" r="20" fill="#212121"/><circle cx="380" cy="362" r="8" fill="#9e9e9e"/>
+    <circle cx="530" cy="362" r="20" fill="#212121"/><circle cx="530" cy="362" r="8" fill="#9e9e9e"/>
+    <rect x="420" y="342" width="50" height="12" fill="#ffffff" stroke="#212121" stroke-width="1.5"/>
+    <rect x="120" y="342" width="50" height="12" fill="#ffffff" stroke="#212121" stroke-width="1.5"/>
+  </g>
+</svg>

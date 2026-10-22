@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400">
+  <defs>
+    <radialGradient id="bg" cx="0.5" cy="0.45" r="0.75">
+      <stop offset="0" stop-color="#9a9a9a"/>
+      <stop offset="1" stop-color="#5c5c5c"/>
+    </radialGradient>
+  </defs>
+  <rect width="600" height="400" fill="url(#bg)"/>
+  <g transform="rotate(-3 300 200)">
+    <rect x="80" y="50" width="450" height="310" rx="8" fill="#000" opacity="0.25" transform="translate(8 10)"/>
+    <rect x="75" y="45" width="450" height="310" rx="8" fill="#1c1c1c"/>
+    <!-- 24-patch reference chart -->
+    <g>
+      <rect x="95" y="65" width="60" height="60" fill="#735244"/>
+      <rect x="165" y="65" width="60" height="60" fill="#c29682"/>
+      <rect x="235" y="65" width="60" height="60" fill="#627a9d"/>
+      <rect x="305" y="65" width="60" height="60" fill="#576c43"/>
+      <rect x="375" y="65" width="60" height="60" fill="#8580b1"/>
+      <rect x="445" y="65" width="60" height="60" fill="#67bdaa"/>
+      <rect x="95" y="135" width="60" height="60" fill="#d67e2c"/>
+      <rect x="165" y="135" width="60" height="60" fill="#505ba6"/>
+      <rect x="235" y="135" width="60" height="60" fill="#c15a63"/>
+      <rect x="305" y="135" width="60" height="60" fill="#5e3c6c"/>
+      <rect x="375" y="135" width="60" height="60" fill="#9dbc40"/>
+      <rect x="445" y="135" width="60" height="60" fill="#e0a32e"/>
+      <rect x="95" y="205" width="60" height="60" fill="#383d96"/>
+      <rect x="165" y="205" width="60" height="60" fill="#469449"/>
+      <rect x="235" y="205" width="60" height="60" fill="#af363c"/>
+      <rect x="305" y="205" width="60" height="60" fill="#e7c71f"/>
+      <rect x="375" y="205" width="60" height="60" fill="#bb5695"/>
+      <rect x="445" y="205" width="60" height="60" fill="#0885a1"/>
+      <rect x="95" y="275" width="60" height="60" fill="#f3f3f2"/>
+      <rect x="165" y="275" width="60" height="60" fill="#c8c8c8"/>
+      <rect x="235" y="275" width="60" height="60" fill="#a0a0a0"/>
+      <rect x="305" y="275" width="60" height="60" fill="#7a7a79"/>
+      <rect x="375" y="275" width="60" height="60" fill="#555555"/>
+      <rect x="445" y="275" width="60" height="60" fill="#343434"/>
+    </g>
+  </g>
+</svg>
