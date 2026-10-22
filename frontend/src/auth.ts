@@ -18,11 +18,18 @@ const user = ref<Me | null>(null);
 const ready = ref(false);
 
 export const isLoggedIn = computed(() => user.value !== null);
-export const canReview = computed(
-  () =>
-    user.value !== null &&
-    (user.value.roles.includes('admin') || user.value.roles.includes('reviewer')),
-);
+
+// Mirrors the backend role guards (`crate::auth`). These only drive UI
+// visibility; the server enforces every check.
+function hasAny(...roles: string[]): boolean {
+  return user.value !== null && roles.some((r) => user.value!.roles.includes(r));
+}
+export const isAdmin = computed(() => hasAny('admin'));
+export const canViewPending = computed(() => hasAny('admin', 'reviewer', 'approver'));
+export const canEditPending = computed(() => hasAny('admin', 'reviewer'));
+export const canApprove = computed(() => hasAny('admin', 'approver'));
+export const canEditSets = computed(() => hasAny('admin', 'editor'));
+export const canDeleteSets = computed(() => hasAny('admin', 'deleter'));
 
 async function refresh(): Promise<void> {
   try {
@@ -45,5 +52,17 @@ async function logout(): Promise<void> {
 }
 
 export function useAuth() {
-  return { user, ready, isLoggedIn, canReview, refresh, logout };
+  return {
+    user,
+    ready,
+    isLoggedIn,
+    isAdmin,
+    canViewPending,
+    canEditPending,
+    canApprove,
+    canEditSets,
+    canDeleteSets,
+    refresh,
+    logout,
+  };
 }

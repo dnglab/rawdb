@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
 import { useConfirm } from 'primevue/useconfirm';
 import { api, formatBytes, type PendingEdit } from '../../api';
+import { useAuth } from '../../auth';
 import PageHeader from '../../components/PageHeader.vue';
 import TagInput from '../../components/TagInput.vue';
 
@@ -11,6 +12,8 @@ const props = defineProps<{ upload_id: string }>();
 const router = useRouter();
 const toast = useToast();
 const confirm = useConfirm();
+// `reviewer` edits the upload; `approver` decides on it (approve/reject).
+const { canEditPending, canApprove } = useAuth();
 
 interface EditFileRow {
   old_path: string;
@@ -158,6 +161,24 @@ async function save() {
   }
 }
 
+// Locally drop a file from the review list. The actual S3 delete happens
+// on Save — edit_pending diffs the new file list against the existing meta
+// and removes any file no longer referenced.
+function removeRow(index: number) {
+  const r = files.value[index];
+  if (!r) return;
+  confirm.require({
+    message: `Remove ${r.old_path} from this upload? The file is deleted from storage on save.`,
+    header: 'Remove file',
+    icon: 'pi pi-exclamation-triangle',
+    rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
+    acceptProps: { label: 'Remove', severity: 'danger' },
+    accept: () => {
+      files.value.splice(index, 1);
+    },
+  });
+}
+
 async function approve() {
   if (selectedCount.value === 0) {
     toast.add({
@@ -168,14 +189,18 @@ async function approve() {
     });
     return;
   }
+  // Approve-only users can't edit, so nothing was renamed: promote by the
+  // stored paths and skip the save.
   const selectedPaths = files.value
     .filter((f) => f.selected)
-    .map((f) => curPath(f));
+    .map((f) => (canEditPending.value ? curPath(f) : f.old_path));
   busy.value = true;
   try {
     // Persist edits first (also performs any prefix/filename renames), then
     // promote only the checked files; unchecked files are discarded.
-    await api.adminPendingEdit(props.upload_id, buildEdit());
+    if (canEditPending.value) {
+      await api.adminPendingEdit(props.upload_id, buildEdit());
+    }
     await api.adminApprove(props.upload_id, conflict.value, selectedPaths);
     toast.add({
       severity: 'success',
@@ -331,31 +356,44 @@ onMounted(load);
           <div class="grid">
             <label class="fld">
               <span>Maker *</span>
-              <InputText v-model="setForm.maker" />
+              <InputText v-model="setForm.maker" :disabled="!canEditPending" />
             </label>
             <label class="fld">
               <span>Model *</span>
-              <InputText v-model="setForm.model" />
+              <InputText v-model="setForm.model" :disabled="!canEditPending" />
             </label>
             <label class="fld">
               <span>License</span>
-              <InputText v-model="setForm.license" />
+              <InputText v-model="setForm.license" :disabled="!canEditPending" />
             </label>
             <label class="fld">
               <span>Uploaded by</span>
-              <InputText v-model="setForm.uploaded_by" placeholder="" />
+              <InputText
+                v-model="setForm.uploaded_by"
+                placeholder=""
+                :disabled="!canEditPending"
+              />
             </label>
             <label class="fld">
               <span>Uploaded at</span>
               <InputText :model-value="setForm.uploaded_at ?? '—'" disabled />
             </label>
             <label class="fld wide chk">
-              <Checkbox v-model="setForm.special" binary />
+              <Checkbox
+                v-model="setForm.special"
+                binary
+                :disabled="!canEditPending"
+              />
               <span>Non-camera sample set (hidden from default browsing)</span>
             </label>
             <label class="fld wide">
               <span>Notes</span>
-              <Textarea v-model="setForm.notes" rows="2" auto-resize />
+              <Textarea
+                v-model="setForm.notes"
+                rows="2"
+                auto-resize
+                :disabled="!canEditPending"
+              />
             </label>
           </div>
         </template>
@@ -391,9 +429,14 @@ onMounted(load);
         </template>
         <template #content>
           <p class="muted hint">
-            Renaming the prefix or filename moves the file in storage on save.
-            On approve, only checked files are kept; unchecked files are
-            deleted. Reject deletes the whole set regardless of checkmarks.
+            <template v-if="canEditPending">
+              Renaming the prefix or filename moves the file in storage on
+              save; removed files are deleted from storage on save.
+            </template>
+            <template v-if="canApprove">
+              On approve, only checked files are kept; unchecked files are
+              deleted. Reject deletes the whole set regardless of checkmarks.
+            </template>
           </p>
           <Message
             v-if="verifyResult"
@@ -414,11 +457,15 @@ onMounted(load);
               <Checkbox v-model="r.selected" binary />
               <label class="mini">
                 <span>Prefix</span>
-                <InputText v-model="r.prefix" />
+                <InputText v-model="r.prefix" :disabled="!canEditPending" />
               </label>
               <label class="mini grow">
                 <span>Filename</span>
-                <InputText v-model="r.filename" fluid />
+                <InputText
+                  v-model="r.filename"
+                  fluid
+                  :disabled="!canEditPending"
+                />
               </label>
               <div class="mini">
                 <span>Ext</span>
@@ -436,17 +483,37 @@ onMounted(load);
                   outlined
                 />
               </a>
+              <Button
+                v-if="canEditPending"
+                icon="pi pi-trash"
+                size="small"
+                severity="danger"
+                text
+                rounded
+                title="Remove this file"
+                :disabled="busy"
+                @click="removeRow(i)"
+              />
             </div>
             <div class="line2">
               <label class="mini full">
                 <span>Tags</span>
-                <TagInput v-model="r.tags" placeholder="add tag" />
+                <TagInput
+                  v-model="r.tags"
+                  placeholder="add tag"
+                  :disabled="!canEditPending"
+                />
               </label>
             </div>
             <div class="line3">
               <label class="mini full">
                 <span>Note</span>
-                <InputText v-model="r.notes" placeholder="" fluid />
+                <InputText
+                  v-model="r.notes"
+                  placeholder=""
+                  fluid
+                  :disabled="!canEditPending"
+                />
               </label>
             </div>
             <div v-if="r.sha256 || r.verify" class="hash-row">
@@ -486,34 +553,37 @@ onMounted(load);
         <template #content>
           <div class="decide">
             <Button
+              v-if="canEditPending"
               label="Save"
               icon="pi pi-save"
               :loading="busy"
               @click="save"
             />
             <span class="sep" />
-            <span class="lbl">On conflict</span>
-            <Select
-              v-model="conflict"
-              :options="conflictOptions"
-              option-label="label"
-              option-value="value"
-            />
-            <Button
-              label="Approve selected"
-              icon="pi pi-check"
-              severity="success"
-              :loading="busy"
-              @click="approve"
-            />
-            <Button
-              label="Reject"
-              icon="pi pi-times"
-              severity="danger"
-              outlined
-              :disabled="busy"
-              @click="reject"
-            />
+            <template v-if="canApprove">
+              <span class="lbl">On conflict</span>
+              <Select
+                v-model="conflict"
+                :options="conflictOptions"
+                option-label="label"
+                option-value="value"
+              />
+              <Button
+                label="Approve selected"
+                icon="pi pi-check"
+                severity="success"
+                :loading="busy"
+                @click="approve"
+              />
+              <Button
+                label="Reject"
+                icon="pi pi-times"
+                severity="danger"
+                outlined
+                :disabled="busy"
+                @click="reject"
+              />
+            </template>
           </div>
         </template>
       </Card>

@@ -12,7 +12,7 @@ import licenseInfoHtml from '../license-info.inc.md';
 const props = defineProps<{ maker: string; model: string }>();
 const router = useRouter();
 const toast = useToast();
-const { canReview } = useAuth();
+const { canEditSets, canDeleteSets } = useAuth();
 
 // Tracks which file paths have an in-flight download preflight, so the
 // row's button can show a brief busy state.
@@ -110,7 +110,7 @@ watch(() => [props.maker, props.model], load);
           />
           <Tag :value="detail.license" severity="info" />
           <Button
-            v-if="canReview"
+            v-if="canEditSets || canDeleteSets"
             label="Edit"
             icon="pi pi-pencil"
             size="small"

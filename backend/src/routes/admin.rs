@@ -1,5 +1,12 @@
-//! Admin/reviewer endpoints: pending review (approve/reject) and (in
-//! Phase 8) user management.
+//! Role-gated admin endpoints: pending review, approved-set editing and
+//! user management.
+//!
+//! Role split (see the guard constants in `crate::auth`):
+//! - `reviewer`: view and edit pending uploads (incl. removing files).
+//! - `approver`: view pending uploads, approve or reject them.
+//! - `editor`: edit approved-set metadata and rename files; never deletes.
+//! - `deleter`: delete single files or whole approved sets.
+//! - `admin`: everything, plus user management.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -9,7 +16,10 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::auth::{AuthGuard, ADMIN_ONLY, REVIEWER_OR_ADMIN};
+use crate::auth::{
+    AuthGuard, ADMIN_ONLY, APPROVER_OR_ADMIN, DELETER_OR_ADMIN, EDITOR_OR_ADMIN,
+    PENDING_VIEWERS, REVIEWER_OR_ADMIN,
+};
 use crate::error::{AppError, AppResult};
 use crate::meta::{self, FileMeta, RawdbMeta, SetMeta};
 use crate::s3::S3Error;
@@ -33,6 +43,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/sets/:maker/:model",
             axum::routing::put(edit_set).delete(delete_set),
+        )
+        .route(
+            "/sets/:maker/:model/files/*path",
+            axum::routing::delete(delete_set_file),
         )
         .route("/users", get(list_users).post(add_user))
         .route(
@@ -62,11 +76,11 @@ pub struct PendingRow {
     responses(
         (status = 200, body = [PendingRow]),
         (status = 401, description = "Not authenticated"),
-        (status = 403, description = "Not a reviewer or admin"),
+        (status = 403, description = "Not a reviewer, approver or admin"),
     ),
 )]
 pub async fn list_pending(
-    _auth: AuthGuard<REVIEWER_OR_ADMIN>,
+    _auth: AuthGuard<PENDING_VIEWERS>,
     State(state): State<AppState>,
 ) -> AppResult<Json<Vec<PendingRow>>> {
     let conn = state
@@ -145,7 +159,7 @@ pub struct PendingDetail {
     ),
 )]
 pub async fn get_pending(
-    _auth: AuthGuard<REVIEWER_OR_ADMIN>,
+    _auth: AuthGuard<PENDING_VIEWERS>,
     State(state): State<AppState>,
     Path(upload_id): Path<String>,
 ) -> AppResult<Json<PendingDetail>> {
@@ -230,7 +244,7 @@ pub async fn get_pending(
     ),
 )]
 pub async fn download_pending(
-    _auth: AuthGuard<REVIEWER_OR_ADMIN>,
+    _auth: AuthGuard<PENDING_VIEWERS>,
     State(state): State<AppState>,
     Path((upload_id, file_path)): Path<(String, String)>,
     axum::extract::Query(q): axum::extract::Query<crate::routes::public::DownloadQuery>,
@@ -287,6 +301,7 @@ pub struct EditFile {
     responses(
         (status = 200, description = "Edits applied"),
         (status = 400, description = "Invalid path / duplicate / blocked extension"),
+        (status = 403, description = "Not a reviewer or admin"),
     ),
 )]
 pub async fn edit_pending(
@@ -345,6 +360,8 @@ pub async fn edit_pending(
     // only old paths that are not also destinations.
     let destinations: std::collections::HashSet<&str> =
         req.files.iter().map(|f| f.path.as_str()).collect();
+    let referenced_old: std::collections::HashSet<&str> =
+        req.files.iter().map(|f| f.old_path.as_str()).collect();
     let mut to_delete: Vec<String> = Vec::new();
     for f in &req.files {
         if f.old_path == f.path {
@@ -355,6 +372,17 @@ pub async fn edit_pending(
         state.s3.copy(&src, &dst).await.map_err(AppError::Other)?;
         if !destinations.contains(f.old_path.as_str()) {
             to_delete.push(src);
+        }
+    }
+    // Files in the existing meta but absent from the request were removed
+    // by the reviewer — drop them from S3 so they don't linger as orphans
+    // under the pending prefix. Skip any path another file was just
+    // renamed onto.
+    for existing_path in existing_by_old_path.keys() {
+        if !referenced_old.contains(existing_path.as_str())
+            && !destinations.contains(existing_path.as_str())
+        {
+            to_delete.push(format!("{prefix}{existing_path}"));
         }
     }
     for key in to_delete {
@@ -439,6 +467,8 @@ pub struct EditSetRequest {
 /// Edit an already-approved set in place: rename files, edit per-file
 /// tags/notes/license, and edit set-level license/notes/uploaded_by.
 /// `maker`/`model` are the set's identity and are not editable here.
+/// Never removes files: every existing file must appear in `files`
+/// (removal is `DELETE /api/admin/sets/{maker}/{model}/files/{path}`).
 #[utoipa::path(
     put,
     path = "/api/admin/sets/{maker}/{model}",
@@ -451,11 +481,13 @@ pub struct EditSetRequest {
     request_body = EditSetRequest,
     responses(
         (status = 200, description = "Set updated"),
+        (status = 400, description = "Invalid path / duplicate / blocked extension / existing file missing from request"),
+        (status = 403, description = "Not an editor or admin"),
         (status = 404, description = "Set does not exist"),
     ),
 )]
 pub async fn edit_set(
-    _auth: AuthGuard<ADMIN_ONLY>,
+    _auth: AuthGuard<EDITOR_OR_ADMIN>,
     State(state): State<AppState>,
     Path((maker, model)): Path<(String, String)>,
     Json(req): Json<EditSetRequest>,
@@ -511,11 +543,30 @@ pub async fn edit_set(
     // surface them.
     let existing_by_old_path = load_existing_file_meta(&state, &prefix).await;
 
+    // Editing never removes files — that's the `deleter` role's job via
+    // `DELETE .../files/{path}`. Every existing file must therefore be
+    // carried in the request. Together with the duplicate-destination
+    // check above, this also stops a rename from overwriting a file that
+    // stays in place.
+    let referenced_old: std::collections::HashSet<&str> =
+        req.files.iter().map(|f| f.old_path.as_str()).collect();
+    let mut missing: Vec<&str> = existing_by_old_path
+        .keys()
+        .map(String::as_str)
+        .filter(|p| !referenced_old.contains(p))
+        .collect();
+    if !missing.is_empty() {
+        missing.sort_unstable();
+        return Err(AppError::BadRequest(format!(
+            "edit cannot remove files (missing: {}); delete them via \
+             DELETE /api/admin/sets/{{maker}}/{{model}}/files/{{path}}",
+            missing.join(", ")
+        )));
+    }
+
     // Move renamed files in S3 (copy new, delete old that isn't a target).
     let destinations: std::collections::HashSet<&str> =
         req.files.iter().map(|f| f.path.as_str()).collect();
-    let referenced_old: std::collections::HashSet<&str> =
-        req.files.iter().map(|f| f.old_path.as_str()).collect();
     let mut to_delete: Vec<String> = Vec::new();
     for f in &req.files {
         if f.old_path == f.path {
@@ -526,14 +577,6 @@ pub async fn edit_set(
         state.s3.copy(&src, &dst).await.map_err(AppError::Other)?;
         if !destinations.contains(f.old_path.as_str()) {
             to_delete.push(src);
-        }
-    }
-    // Files in the existing meta but absent from the new request are
-    // intentional removals — drop them from S3 so they don't linger as
-    // orphans under the set prefix.
-    for existing_path in existing_by_old_path.keys() {
-        if !referenced_old.contains(existing_path.as_str()) {
-            to_delete.push(format!("{prefix}{existing_path}"));
         }
     }
     for key in to_delete {
@@ -592,7 +635,7 @@ pub async fn edit_set(
 
 /// Delete an approved set in its entirety. Wipes
 /// `samples/<maker>/<model>/` (meta + all files) and refreshes the local
-/// cache. Admin only — irreversible.
+/// cache. Deleter or admin only — irreversible.
 #[utoipa::path(
     delete,
     path = "/api/admin/sets/{maker}/{model}",
@@ -604,11 +647,12 @@ pub async fn edit_set(
     ),
     responses(
         (status = 204, description = "Set removed"),
+        (status = 403, description = "Not a deleter or admin"),
         (status = 404, description = "Set does not exist"),
     ),
 )]
 pub async fn delete_set(
-    _auth: AuthGuard<ADMIN_ONLY>,
+    _auth: AuthGuard<DELETER_OR_ADMIN>,
     State(state): State<AppState>,
     Path((maker, model)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
@@ -647,6 +691,97 @@ pub async fn delete_set(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Delete a single file from an approved set: drops its entry from
+/// `rawdb-meta.toml` and removes the object. The last remaining file
+/// cannot be removed this way — delete the whole set instead. Deleter or
+/// admin only — irreversible.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/sets/{maker}/{model}/files/{path}",
+    tag = "admin",
+    security(("session_cookie" = [])),
+    params(
+        ("maker" = String, Path, description = "Camera maker"),
+        ("model" = String, Path, description = "Camera model"),
+        ("path" = String, Path, description = "Relative file path within the set"),
+    ),
+    responses(
+        (status = 204, description = "File removed"),
+        (status = 400, description = "Invalid path, or the set's last file"),
+        (status = 403, description = "Not a deleter or admin"),
+        (status = 404, description = "Set or file does not exist"),
+    ),
+)]
+pub async fn delete_set_file(
+    _auth: AuthGuard<DELETER_OR_ADMIN>,
+    State(state): State<AppState>,
+    Path((maker, model, file_path)): Path<(String, String, String)>,
+) -> AppResult<StatusCode> {
+    if file_path.contains("..") {
+        return Err(AppError::BadRequest("invalid path".into()));
+    }
+    if state
+        .db
+        .get_set(&maker, &model)
+        .map_err(AppError::Other)?
+        .is_none()
+    {
+        return Err(AppError::NotFound);
+    }
+    let prefix = format!("samples/{maker}/{model}/");
+
+    // Strict load: we rewrite the meta, so a missing/unreadable one must
+    // fail rather than be treated as empty.
+    let meta_key = format!("{prefix}rawdb-meta.toml");
+    let (bytes, _) = state.s3.get_bytes(&meta_key).await.map_err(|e| match e {
+        S3Error::NotFound(_) | S3Error::PreconditionFailed => AppError::NotFound,
+        S3Error::Other(e) => AppError::Other(e),
+    })?;
+    let toml = String::from_utf8(bytes)
+        .map_err(|e| AppError::Other(anyhow::anyhow!("meta not UTF-8: {e}")))?;
+    let mut parsed = meta::parse(&toml)
+        .map_err(|e| AppError::Other(anyhow::anyhow!("invalid meta: {e}")))?;
+
+    let before = parsed.files.len();
+    parsed.files.retain(|f| f.path != file_path);
+    if parsed.files.len() == before {
+        return Err(AppError::NotFound);
+    }
+    if parsed.files.is_empty() {
+        return Err(AppError::BadRequest(
+            "cannot remove the last file; delete the whole set instead".into(),
+        ));
+    }
+
+    // Meta first, then the object: if the delete fails we're left with an
+    // orphan object rather than a catalog entry pointing at nothing.
+    state
+        .s3
+        .put_bytes(
+            &meta_key,
+            meta::to_toml(&parsed).into_bytes(),
+            Some("application/toml"),
+            None,
+            None,
+        )
+        .await
+        .map_err(|e| AppError::Other(anyhow::anyhow!("write meta: {e}")))?;
+    state
+        .s3
+        .delete(&format!("{prefix}{file_path}"))
+        .await
+        .map_err(AppError::Other)?;
+
+    let _ = state.scanner.refresh_one_set(&maker, &model).await;
+    crate::sync_tick::bump(
+        &state,
+        &[crate::sync_tick::Domain::Sets],
+        "delete_set_file",
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Debug, Deserialize, Default, ToSchema)]
 pub struct ApproveRequest {
     /// `refuse` (default), `merge`, or `replace`. Controls behavior when an
@@ -673,12 +808,13 @@ pub struct ApproveRequest {
     responses(
         (status = 200, description = "Approved; files copied and pending wiped"),
         (status = 400, description = "Bad conflict mode or empty selection"),
+        (status = 403, description = "Not an approver or admin"),
         (status = 404, description = "Pending upload not found"),
         (status = 409, description = "Conflict with existing set under `refuse` mode"),
     ),
 )]
 pub async fn approve_pending(
-    auth: AuthGuard<REVIEWER_OR_ADMIN>,
+    auth: AuthGuard<APPROVER_OR_ADMIN>,
     State(state): State<AppState>,
     Path(upload_id): Path<String>,
     Json(req): Json<ApproveRequest>,
@@ -1076,7 +1212,10 @@ fn validate_roles(roles: &[String]) -> AppResult<()> {
     for r in roles {
         // `apiservice`: may hold a personal API key (download rate-limit
         // bypass + access to /api/export).
-        if !matches!(r.as_str(), "admin" | "reviewer" | "apiservice") {
+        if !matches!(
+            r.as_str(),
+            "admin" | "reviewer" | "approver" | "editor" | "deleter" | "apiservice"
+        ) {
             return Err(AppError::BadRequest(format!("unknown role: {r}")));
         }
     }
@@ -1103,11 +1242,12 @@ pub(crate) fn map_users_error(e: UsersError) -> AppError {
     params(("upload_id" = String, Path, description = "Upload ID")),
     responses(
         (status = 200, description = "Pending upload deleted"),
+        (status = 403, description = "Not an approver or admin"),
         (status = 404, description = "No such upload"),
     ),
 )]
 pub async fn reject_pending(
-    _auth: AuthGuard<REVIEWER_OR_ADMIN>,
+    _auth: AuthGuard<APPROVER_OR_ADMIN>,
     State(state): State<AppState>,
     Path(upload_id): Path<String>,
 ) -> AppResult<StatusCode> {
@@ -1174,7 +1314,7 @@ pub struct VerifyResult {
     ),
 )]
 pub async fn verify_pending(
-    _auth: AuthGuard<REVIEWER_OR_ADMIN>,
+    _auth: AuthGuard<PENDING_VIEWERS>,
     State(state): State<AppState>,
     Path(upload_id): Path<String>,
 ) -> AppResult<Json<VerifyResult>> {

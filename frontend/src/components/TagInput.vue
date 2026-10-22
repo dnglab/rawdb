@@ -4,6 +4,8 @@ import { ref } from 'vue';
 const props = defineProps<{
   modelValue: string[];
   placeholder?: string;
+  /// Read-only: show the chips but no draft input or remove buttons.
+  disabled?: boolean;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [string[]];
@@ -43,15 +45,20 @@ function remove(i: number) {
 </script>
 
 <template>
-  <div class="tag-input" @click="($refs.inp as HTMLInputElement)?.focus()">
+  <div
+    class="tag-input"
+    :class="{ disabled }"
+    @click="($refs.inp as HTMLInputElement)?.focus()"
+  >
     <Chip
       v-for="(t, i) in modelValue"
       :key="`${t}-${i}`"
       :label="t"
-      removable
+      :removable="!disabled"
       @remove="remove(i)"
     />
     <input
+      v-if="!disabled"
       ref="inp"
       v-model="draft"
       class="tag-draft"
@@ -75,6 +82,10 @@ function remove(i: number) {
   border-radius: var(--p-inputtext-border-radius, 6px);
   background: var(--p-inputtext-background, var(--p-surface-0));
   cursor: text;
+}
+.tag-input.disabled {
+  cursor: default;
+  opacity: 0.7;
 }
 .tag-input:focus-within {
   border-color: var(--p-primary-500);

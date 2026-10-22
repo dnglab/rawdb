@@ -2,9 +2,11 @@
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { api, type PendingRow } from '../../api';
+import { useAuth } from '../../auth';
 import PageHeader from '../../components/PageHeader.vue';
 
 const router = useRouter();
+const { isAdmin } = useAuth();
 const rows = ref<PendingRow[]>([]);
 const loading = ref(false);
 const err = ref<string | null>(null);
@@ -40,6 +42,7 @@ onMounted(load);
     >
       <template #actions>
         <Button
+          v-if="isAdmin"
           label="Manage users"
           icon="pi pi-users"
           severity="secondary"
@@ -51,7 +54,7 @@ onMounted(load);
 
     <Message v-if="denied" severity="warn">
       Not authorized. <RouterLink to="/login">Sign in</RouterLink> with a
-      reviewer or admin account.
+      reviewer, approver or admin account.
     </Message>
     <Message v-else-if="err" severity="error">{{ err }}</Message>
 

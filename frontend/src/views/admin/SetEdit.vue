@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
 import { useConfirm } from 'primevue/useconfirm';
 import { api, formatBytes, type SetEdit } from '../../api';
+import { useAuth } from '../../auth';
 import PageHeader from '../../components/PageHeader.vue';
 import TagInput from '../../components/TagInput.vue';
 
@@ -11,6 +12,8 @@ const props = defineProps<{ maker: string; model: string }>();
 const router = useRouter();
 const toast = useToast();
 const confirm = useConfirm();
+// `editor` edits metadata/renames; `deleter` removes files or the set.
+const { canEditSets, canDeleteSets } = useAuth();
 
 interface Row {
   old_path: string;
@@ -95,20 +98,40 @@ function buildEdit(): SetEdit {
   };
 }
 
-// Locally drop a file from the editor list. The actual S3 delete happens
-// on Save — edit_set diffs the new file list against the existing meta
-// and removes any file no longer referenced.
+// Delete a single file right away (edit_set never removes files). Other
+// rows keep their unsaved edits; the next Save sends a list without this
+// file, matching the rewritten server-side meta.
 function removeRow(index: number) {
   const r = files.value[index];
   if (!r) return;
   confirm.require({
-    message: `Remove ${r.old_path} from this set? The file is deleted from storage on save.`,
+    message: `Remove ${r.old_path} from this set? The file is permanently deleted from storage now.`,
     header: 'Remove file',
     icon: 'pi pi-exclamation-triangle',
     rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
     acceptProps: { label: 'Remove', severity: 'danger' },
-    accept: () => {
-      files.value.splice(index, 1);
+    accept: async () => {
+      busy.value = true;
+      try {
+        await api.adminSetFileDelete(props.maker, props.model, r.old_path);
+        const i = files.value.indexOf(r);
+        if (i >= 0) files.value.splice(i, 1);
+        toast.add({
+          severity: 'success',
+          summary: 'File removed',
+          detail: r.old_path,
+          life: 3000,
+        });
+      } catch (e) {
+        toast.add({
+          severity: 'error',
+          summary: 'Remove failed',
+          detail: String(e),
+          life: 6000,
+        });
+      } finally {
+        busy.value = false;
+      }
     },
   });
 }
@@ -207,24 +230,38 @@ onMounted(load);
               <Select
                 v-model="setForm.license"
                 :options="['CC0 1.0']"
+                :disabled="!canEditSets"
                 fluid
               />
             </label>
             <label class="fld">
               <span>Uploaded by</span>
-              <InputText v-model="setForm.uploaded_by" placeholder="" />
+              <InputText
+                v-model="setForm.uploaded_by"
+                placeholder=""
+                :disabled="!canEditSets"
+              />
             </label>
             <label class="fld">
               <span>Uploaded at</span>
               <InputText :model-value="setForm.uploaded_at ?? '—'" disabled />
             </label>
             <label class="fld wide chk">
-              <Checkbox v-model="setForm.special" binary />
+              <Checkbox
+                v-model="setForm.special"
+                binary
+                :disabled="!canEditSets"
+              />
               <span>Non-camera sample set (hidden from default browsing)</span>
             </label>
             <label class="fld wide">
               <span>Notes</span>
-              <Textarea v-model="setForm.notes" rows="2" auto-resize />
+              <Textarea
+                v-model="setForm.notes"
+                rows="2"
+                auto-resize
+                :disabled="!canEditSets"
+              />
             </label>
           </div>
         </template>
@@ -234,17 +271,26 @@ onMounted(load);
         <template #title>Files</template>
         <template #content>
           <p class="muted hint">
-            Renaming the prefix or filename moves the file in storage on save.
+            <template v-if="canEditSets">
+              Renaming the prefix or filename moves the file in storage on save.
+            </template>
+            <template v-if="canDeleteSets">
+              Removing a file deletes it from storage immediately.
+            </template>
           </p>
           <div v-for="(r, i) in files" :key="r.old_path" class="frow">
             <div class="line1">
               <label class="mini">
                 <span>Prefix</span>
-                <InputText v-model="r.prefix" />
+                <InputText v-model="r.prefix" :disabled="!canEditSets" />
               </label>
               <label class="mini grow">
                 <span>Filename</span>
-                <InputText v-model="r.filename" fluid />
+                <InputText
+                  v-model="r.filename"
+                  fluid
+                  :disabled="!canEditSets"
+                />
               </label>
               <div class="mini">
                 <span>Ext</span>
@@ -267,25 +313,40 @@ onMounted(load);
                 />
               </a>
               <Button
+                v-if="canDeleteSets"
                 icon="pi pi-trash"
                 size="small"
                 severity="danger"
                 text
                 rounded
-                title="Remove this file"
+                :disabled="busy || files.length <= 1"
+                :title="
+                  files.length <= 1
+                    ? 'Last file — delete the whole set instead'
+                    : 'Remove this file'
+                "
                 @click="removeRow(i)"
               />
             </div>
             <div class="line2">
               <label class="mini full">
                 <span>Tags</span>
-                <TagInput v-model="r.tags" placeholder="add tag" />
+                <TagInput
+                  v-model="r.tags"
+                  placeholder="add tag"
+                  :disabled="!canEditSets"
+                />
               </label>
             </div>
             <div class="line3">
               <label class="mini full">
                 <span>Note</span>
-                <InputText v-model="r.notes" placeholder="" fluid />
+                <InputText
+                  v-model="r.notes"
+                  placeholder=""
+                  fluid
+                  :disabled="!canEditSets"
+                />
               </label>
             </div>
             <div v-if="r.sha256" class="hash" :title="r.sha256">
@@ -301,12 +362,14 @@ onMounted(load);
         <template #content>
           <div class="bottom">
             <Button
+              v-if="canEditSets"
               label="Save"
               icon="pi pi-save"
               :loading="busy"
               @click="save"
             />
             <Button
+              v-if="canDeleteSets"
               label="Delete set"
               icon="pi pi-trash"
               severity="danger"

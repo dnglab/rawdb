@@ -342,6 +342,18 @@ export const api = {
       throw await errorFromResponse(url, res);
     }
   },
+  adminSetFileDelete: async (
+    maker: string,
+    model: string,
+    path: string,
+  ): Promise<void> => {
+    const parts = path.split('/').map(enc).join('/');
+    const url = `/api/admin/sets/${enc(maker)}/${enc(model)}/files/${parts}`;
+    const res = await fetch(url, { method: 'DELETE', credentials: 'same-origin' });
+    if (!res.ok && res.status !== 204) {
+      throw await errorFromResponse(url, res);
+    }
+  },
   adminApprove: (
     uploadId: string,
     conflict: string,

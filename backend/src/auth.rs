@@ -1,5 +1,5 @@
 //! Authentication primitives: password verification, JWT session cookie,
-//! and a `RequireRole` extractor used by admin/reviewer handlers.
+//! and a `RequireRole` extractor used by the role-gated admin handlers.
 //!
 //! Two login paths produce the same `Session` JWT cookie:
 //! - **password**: `POST /auth/login` checks `RAWDB_ADMIN_PASSWORD[_HASH]`
@@ -34,7 +34,14 @@ pub const BOOTSTRAP_SUB: &str = "bootstrap:admin";
 pub const PASSWORD_SOURCE: &str = "password";
 pub const OIDC_SOURCE: &str = "oidc";
 pub const ROLE_ADMIN: &str = "admin";
+/// Curates pending uploads: edit tags/notes, rename and remove files.
 pub const ROLE_REVIEWER: &str = "reviewer";
+/// Approves or rejects pending uploads. Cannot edit them.
+pub const ROLE_APPROVER: &str = "approver";
+/// Edits metadata (and renames files) of approved sets. Cannot delete.
+pub const ROLE_EDITOR: &str = "editor";
+/// Deletes single files or whole approved sets.
+pub const ROLE_DELETER: &str = "deleter";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -192,10 +199,26 @@ impl FromRequestParts<AppState> for SessionExtractor {
 /// (per `users.toml`) are rejected.
 pub struct RequireRole<const ROLE_BITS: u8>;
 
-pub const REVIEWER_BIT: u8 = 0b01;
-pub const ADMIN_BIT: u8 = 0b10;
+pub const REVIEWER_BIT: u8 = 0b0_0001;
+pub const ADMIN_BIT: u8 = 0b0_0010;
+pub const APPROVER_BIT: u8 = 0b0_0100;
+pub const EDITOR_BIT: u8 = 0b0_1000;
+pub const DELETER_BIT: u8 = 0b1_0000;
 pub const ADMIN_ONLY: u8 = ADMIN_BIT;
 pub const REVIEWER_OR_ADMIN: u8 = ADMIN_BIT | REVIEWER_BIT;
+pub const APPROVER_OR_ADMIN: u8 = ADMIN_BIT | APPROVER_BIT;
+pub const EDITOR_OR_ADMIN: u8 = ADMIN_BIT | EDITOR_BIT;
+pub const DELETER_OR_ADMIN: u8 = ADMIN_BIT | DELETER_BIT;
+/// Read-only access to the pending queue (list, detail, download, verify).
+pub const PENDING_VIEWERS: u8 = ADMIN_BIT | REVIEWER_BIT | APPROVER_BIT;
+
+const ROLE_BIT_TABLE: &[(u8, &str)] = &[
+    (ADMIN_BIT, ROLE_ADMIN),
+    (REVIEWER_BIT, ROLE_REVIEWER),
+    (APPROVER_BIT, ROLE_APPROVER),
+    (EDITOR_BIT, ROLE_EDITOR),
+    (DELETER_BIT, ROLE_DELETER),
+];
 
 pub struct AuthGuard<const ROLE_BITS: u8>(pub Session);
 
@@ -207,17 +230,22 @@ impl<const ROLE_BITS: u8> FromRequestParts<AppState> for AuthGuard<ROLE_BITS> {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let SessionExtractor(sess) = SessionExtractor::from_request_parts(parts, state).await?;
-        // Check blocked status (skip for bootstrap admin).
+        let SessionExtractor(mut sess) = SessionExtractor::from_request_parts(parts, state).await?;
+        // OIDC users: check blocked status and use their *live* roles from
+        // the users.toml mirror rather than the ones baked into the JWT, so
+        // role changes apply without a re-login. A user removed since
+        // login is rejected, matching the login-time check. The bootstrap
+        // admin has no users.toml entry and keeps its JWT roles.
         if sess.sub != BOOTSTRAP_SUB {
-            if let Some(u) = state.db.get_user(&sess.sub).map_err(internal)? {
-                if u.blocked {
-                    return Err(AppError::Forbidden.into_response());
-                }
+            let Some(u) = state.db.get_user(&sess.sub).map_err(internal)? else {
+                return Err(AppError::Forbidden.into_response());
+            };
+            if u.blocked {
+                return Err(AppError::Forbidden.into_response());
             }
+            sess.roles = u.roles;
         }
-        let allowed = is_role_allowed::<ROLE_BITS>(&sess);
-        if !allowed {
+        if !is_role_allowed::<ROLE_BITS>(&sess) {
             return Err(AppError::Forbidden.into_response());
         }
         Ok(AuthGuard(sess))
@@ -225,13 +253,9 @@ impl<const ROLE_BITS: u8> FromRequestParts<AppState> for AuthGuard<ROLE_BITS> {
 }
 
 fn is_role_allowed<const ROLE_BITS: u8>(sess: &Session) -> bool {
-    if (ROLE_BITS & ADMIN_BIT) != 0 && sess.has_role(ROLE_ADMIN) {
-        return true;
-    }
-    if (ROLE_BITS & REVIEWER_BIT) != 0 && sess.has_role(ROLE_REVIEWER) {
-        return true;
-    }
-    false
+    ROLE_BIT_TABLE
+        .iter()
+        .any(|(bit, role)| (ROLE_BITS & bit) != 0 && sess.has_role(role))
 }
 
 fn internal(e: anyhow::Error) -> Response {
@@ -260,4 +284,71 @@ pub fn with_session_cookie(cfg: &Arc<Config>, token: &str, mut resp: Response) -
 pub fn with_cleared_cookie(mut resp: Response) -> Response {
     resp.headers_mut().append(SET_COOKIE, clear_cookie_header());
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roles(r: &[&str]) -> Session {
+        Session {
+            sub: "oidc:test".into(),
+            source: OIDC_SOURCE.into(),
+            roles: r.iter().map(|s| s.to_string()).collect(),
+            exp: 0,
+        }
+    }
+
+    #[test]
+    fn role_guards() {
+        let admin = roles(&[ROLE_ADMIN]);
+        let reviewer = roles(&[ROLE_REVIEWER]);
+        let approver = roles(&[ROLE_APPROVER]);
+        let editor = roles(&[ROLE_EDITOR]);
+        let deleter = roles(&[ROLE_DELETER]);
+        let api = roles(&["apiservice"]);
+
+        // Admin passes every guard.
+        assert!(is_role_allowed::<ADMIN_ONLY>(&admin));
+        assert!(is_role_allowed::<PENDING_VIEWERS>(&admin));
+        assert!(is_role_allowed::<REVIEWER_OR_ADMIN>(&admin));
+        assert!(is_role_allowed::<APPROVER_OR_ADMIN>(&admin));
+        assert!(is_role_allowed::<EDITOR_OR_ADMIN>(&admin));
+        assert!(is_role_allowed::<DELETER_OR_ADMIN>(&admin));
+
+        // Reviewer: view + edit pending, nothing else.
+        assert!(is_role_allowed::<PENDING_VIEWERS>(&reviewer));
+        assert!(is_role_allowed::<REVIEWER_OR_ADMIN>(&reviewer));
+        assert!(!is_role_allowed::<APPROVER_OR_ADMIN>(&reviewer));
+        assert!(!is_role_allowed::<EDITOR_OR_ADMIN>(&reviewer));
+        assert!(!is_role_allowed::<DELETER_OR_ADMIN>(&reviewer));
+        assert!(!is_role_allowed::<ADMIN_ONLY>(&reviewer));
+
+        // Approver: view + approve/reject pending, no editing.
+        assert!(is_role_allowed::<PENDING_VIEWERS>(&approver));
+        assert!(is_role_allowed::<APPROVER_OR_ADMIN>(&approver));
+        assert!(!is_role_allowed::<REVIEWER_OR_ADMIN>(&approver));
+        assert!(!is_role_allowed::<EDITOR_OR_ADMIN>(&approver));
+        assert!(!is_role_allowed::<DELETER_OR_ADMIN>(&approver));
+
+        // Editor: approved-set metadata only.
+        assert!(is_role_allowed::<EDITOR_OR_ADMIN>(&editor));
+        assert!(!is_role_allowed::<DELETER_OR_ADMIN>(&editor));
+        assert!(!is_role_allowed::<PENDING_VIEWERS>(&editor));
+        assert!(!is_role_allowed::<ADMIN_ONLY>(&editor));
+
+        // Deleter: approved-set deletion only.
+        assert!(is_role_allowed::<DELETER_OR_ADMIN>(&deleter));
+        assert!(!is_role_allowed::<EDITOR_OR_ADMIN>(&deleter));
+        assert!(!is_role_allowed::<PENDING_VIEWERS>(&deleter));
+
+        // Unrelated / no roles pass nothing.
+        assert!(!is_role_allowed::<PENDING_VIEWERS>(&api));
+        assert!(!is_role_allowed::<ADMIN_ONLY>(&roles(&[])));
+
+        // Roles combine additively.
+        let both = roles(&[ROLE_REVIEWER, ROLE_APPROVER]);
+        assert!(is_role_allowed::<REVIEWER_OR_ADMIN>(&both));
+        assert!(is_role_allowed::<APPROVER_OR_ADMIN>(&both));
+    }
 }

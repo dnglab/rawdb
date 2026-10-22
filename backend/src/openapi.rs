@@ -80,6 +80,7 @@ impl Modify for SecurityAddon {
         admin::reject_pending,
         admin::verify_pending,
         admin::edit_set,
+        admin::delete_set_file,
         admin::delete_set,
         // Admin — user management
         admin::list_users,
@@ -145,7 +146,7 @@ impl Modify for SecurityAddon {
         (name = "public", description = "Unauthenticated browse, search and download."),
         (name = "upload", description = "Three-step upload flow: begin → PUT files (presigned or stream) → complete."),
         (name = "auth", description = "Password + OIDC login, session probe, logout."),
-        (name = "admin", description = "Reviewer- and admin-gated: pending review, set editing, user management."),
+        (name = "admin", description = "Role-gated: pending review (reviewer/approver), approved-set editing (editor) and deletion (deleter), user management (admin)."),
         (name = "observability", description = "Health probes and Prometheus metrics — served on `RAWDB_METRICS_BIND` (default :9090)."),
     ),
     servers(

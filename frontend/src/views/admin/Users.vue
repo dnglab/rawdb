@@ -16,6 +16,9 @@ interface User {
 const toast = useToast();
 const confirm = useConfirm();
 
+// Must match `validate_roles` in backend/src/routes/admin.rs.
+const ALL_ROLES = ['admin', 'reviewer', 'approver', 'editor', 'deleter', 'apiservice'];
+
 const users = ref<User[]>([]);
 const loading = ref(false);
 
@@ -134,14 +137,8 @@ onMounted(load);
           <InputText v-model="newSub" placeholder="sub (e.g. github:userslug)" />
           <InputText v-model="newDisplay" placeholder="Display name" />
           <div class="roles">
-            <label
-              ><Checkbox v-model="newRoles" value="admin" /> admin</label
-            >
-            <label
-              ><Checkbox v-model="newRoles" value="reviewer" /> reviewer</label
-            >
-            <label
-              ><Checkbox v-model="newRoles" value="apiservice" /> apiservice</label
+            <label v-for="role in ALL_ROLES" :key="role"
+              ><Checkbox v-model="newRoles" :value="role" /> {{ role }}</label
             >
           </div>
           <Button type="submit" label="Add" icon="pi pi-user-plus" />
@@ -163,29 +160,13 @@ onMounted(load);
             <Column header="Roles">
               <template #body="{ data }">
                 <div class="roles">
-                  <label>
+                  <label v-for="role in ALL_ROLES" :key="role">
                     <Checkbox
-                      :model-value="data.roles.includes('admin')"
+                      :model-value="data.roles.includes(role)"
                       binary
-                      @update:model-value="toggleRole(data, 'admin')"
+                      @update:model-value="toggleRole(data, role)"
                     />
-                    admin
-                  </label>
-                  <label>
-                    <Checkbox
-                      :model-value="data.roles.includes('reviewer')"
-                      binary
-                      @update:model-value="toggleRole(data, 'reviewer')"
-                    />
-                    reviewer
-                  </label>
-                  <label>
-                    <Checkbox
-                      :model-value="data.roles.includes('apiservice')"
-                      binary
-                      @update:model-value="toggleRole(data, 'apiservice')"
-                    />
-                    apiservice
+                    {{ role }}
                   </label>
                 </div>
               </template>
@@ -239,7 +220,8 @@ onMounted(load);
 }
 .roles {
   display: flex;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
 }
 .roles label {
   display: inline-flex;

@@ -5,7 +5,7 @@ import type { MenuItem } from 'primevue/menuitem';
 import { useAuth } from './auth';
 
 const router = useRouter();
-const { user, ready, isLoggedIn, canReview, refresh, logout } = useAuth();
+const { user, ready, isLoggedIn, canViewPending, refresh, logout } = useAuth();
 
 onMounted(refresh);
 
@@ -14,7 +14,7 @@ const navItems = computed<MenuItem[]>(() => {
     { label: 'Browse', icon: 'pi pi-images', command: () => router.push('/browse') },
     { label: 'Upload', icon: 'pi pi-upload', command: () => router.push('/upload') },
   ];
-  if (isLoggedIn.value && canReview.value) {
+  if (isLoggedIn.value && canViewPending.value) {
     items.push({
       label: 'Admin',
       icon: 'pi pi-shield',
