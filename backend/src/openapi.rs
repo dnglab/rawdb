@@ -50,6 +50,7 @@ impl Modify for SecurityAddon {
         public::makers,
         public::models,
         public::stats,
+        public::pending,
         public::download,
         export::export,
         // Upload flow

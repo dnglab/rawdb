@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
         .route("/makers", get(makers))
         .route("/models", get(models))
         .route("/stats", get(stats))
+        .route("/pending", get(pending))
         .route("/download/:maker/:model/*path", get(download))
 }
 
@@ -165,6 +166,8 @@ pub struct StatsResponse {
     pub models: u64,
     pub special: u64,
     pub pending: u64,
+    /// Files across approved sets (pending uploads excluded).
+    pub files: u64,
     pub last_full_scan_at: Option<chrono::DateTime<chrono::Utc>>,
     pub ready: bool,
     /// Server-enforced ceiling on a single uploaded file, in bytes. The
@@ -439,10 +442,31 @@ pub async fn stats(State(state): State<AppState>) -> AppResult<Json<StatsRespons
         models: state.db.count_models().map_err(AppError::Other)?,
         special: state.db.count_special().map_err(AppError::Other)?,
         pending: state.db.count_pending().map_err(AppError::Other)?,
+        files: state.db.count_files().map_err(AppError::Other)?,
         last_full_scan_at: state.db.last_full_scan_at().map_err(AppError::Other)?,
         ready: state.is_ready(),
         max_upload_bytes: state.config.max_upload_bytes,
     }))
+}
+
+/// Distinct `(maker, model)` pairs currently waiting in the review queue.
+/// Deliberately exposes only the camera names: no upload ids, uploader,
+/// notes or files.
+#[utoipa::path(
+    get,
+    path = "/api/pending",
+    tag = "public",
+    responses((status = 200, body = ModelsResponse)),
+)]
+pub async fn pending(State(state): State<AppState>) -> AppResult<Json<ModelsResponse>> {
+    let models: Vec<MakerModel> = state
+        .db
+        .pending_maker_models()
+        .map_err(AppError::Other)?
+        .into_iter()
+        .map(|(maker, model)| MakerModel { maker, model })
+        .collect();
+    Ok(Json(ModelsResponse { models }))
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

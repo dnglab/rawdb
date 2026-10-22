@@ -533,6 +533,14 @@ impl Db {
         Ok(n.max(0) as u64)
     }
 
+    /// Number of files across approved sets. Pending uploads live in
+    /// `pending_files` and are not counted.
+    pub fn count_files(&self) -> Result<u64> {
+        let conn = self.reader.get()?;
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
+        Ok(n.max(0) as u64)
+    }
+
     /// Distinct camera makers across approved sets, alphabetically. When
     /// `include_special` is false (the default for public callers),
     /// non-camera "special" sets are excluded so the maker picker stays a
@@ -595,6 +603,21 @@ impl Db {
         let conn = self.reader.get()?;
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM pending_sets", [], |r| r.get(0))?;
         Ok(n.max(0) as u64)
+    }
+
+    /// Distinct `(maker, model)` pairs across pending uploads,
+    /// alphabetically. Several uploads for the same camera collapse into
+    /// one row.
+    pub fn pending_maker_models(&self) -> Result<Vec<(String, String)>> {
+        let conn = self.reader.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT maker, model FROM pending_sets
+             ORDER BY maker COLLATE NOCASE, model COLLATE NOCASE",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     #[allow(dead_code)] // retained for diagnostics; no longer in the stats payload
@@ -1502,6 +1525,27 @@ mod tests {
         );
         db.delete_pending_by_upload_id("20260514T180000Z-a1").unwrap();
         assert_eq!(db.list_pending_upload_ids().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn pending_maker_models_distinct_and_sorted() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::open(dir.path()).unwrap();
+        let mut meta = sample_meta();
+        meta.set.maker = "Nikon".into();
+        meta.set.model = "Z 9".into();
+        db.upsert_pending("20260514T180000Z-a1", &meta, None, &[]).unwrap();
+        db.upsert_pending("20260514T191230Z-9f", &meta, None, &[]).unwrap();
+        meta.set.maker = "Canon".into();
+        meta.set.model = "EOS R5".into();
+        db.upsert_pending("20260515T080000Z-b2", &meta, None, &[]).unwrap();
+        assert_eq!(
+            db.pending_maker_models().unwrap(),
+            vec![
+                ("Canon".to_string(), "EOS R5".to_string()),
+                ("Nikon".to_string(), "Z 9".to_string()),
+            ]
+        );
     }
 
     #[test]

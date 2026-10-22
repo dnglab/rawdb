@@ -48,6 +48,8 @@ export interface Stats {
   models: number;
   special: number;
   pending: number;
+  /// Files across approved sets (pending uploads excluded).
+  files: number;
   last_full_scan_at: string | null;
   ready: boolean;
   /// Server-enforced ceiling on a single uploaded file, in bytes.
@@ -279,6 +281,8 @@ export const api = {
   makers: () => fetchJSON<{ makers: string[] }>('/api/makers'),
   models: () =>
     fetchJSON<{ models: { maker: string; model: string }[] }>('/api/models'),
+  pending: () =>
+    fetchJSON<{ models: { maker: string; model: string }[] }>('/api/pending'),
   oidcEnabled: () => fetchJSON<{ enabled: boolean }>('/auth/oidc/enabled'),
 
   me: () => fetchJSON<Me>('/auth/me'),

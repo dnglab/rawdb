@@ -8,6 +8,11 @@ const router = useRouter();
 const stats = ref<Stats | null>(null);
 const err = ref<string | null>(null);
 
+const pendingOpen = ref(false);
+const pendingList = ref<{ maker: string; model: string }[]>([]);
+const pendingLoading = ref(false);
+const pendingErr = ref<string | null>(null);
+
 onMounted(async () => {
   try {
     stats.value = await api.stats();
@@ -15,6 +20,20 @@ onMounted(async () => {
     err.value = String(e);
   }
 });
+
+// Re-fetched on every open so the list reflects the current queue.
+async function openPending() {
+  pendingOpen.value = true;
+  pendingLoading.value = true;
+  pendingErr.value = null;
+  try {
+    pendingList.value = (await api.pending()).models;
+  } catch (e) {
+    pendingErr.value = String(e);
+  } finally {
+    pendingLoading.value = false;
+  }
+}
 </script>
 
 <template>
@@ -42,13 +61,53 @@ onMounted(async () => {
         </div>
       </div>
       <div class="stat-card">
+        <span class="stat-icon"><i class="pi pi-file" /></span>
+        <div>
+          <div class="stat-value">{{ stats.files }}</div>
+          <div class="stat-label">Sample files</div>
+        </div>
+      </div>
+      <div class="stat-card">
         <span class="stat-icon"><i class="pi pi-clock" /></span>
         <div>
           <div class="stat-value">{{ stats.pending }}</div>
           <div class="stat-label">Pending uploads</div>
         </div>
+        <Button
+          v-if="stats.pending > 0"
+          icon="pi pi-arrow-right"
+          text
+          rounded
+          aria-label="Show pending uploads"
+          class="stat-action"
+          @click="openPending"
+        />
       </div>
     </div>
+
+    <Dialog
+      v-model:visible="pendingOpen"
+      modal
+      header="Pending uploads"
+      :style="{ width: '28rem' }"
+    >
+      <p class="muted pending-hint">
+        Files in pending uploads are not publicly available until they have
+        been reviewed and approved.
+      </p>
+      <ProgressSpinner v-if="pendingLoading" class="pending-spinner" />
+      <Message v-else-if="pendingErr" severity="error">
+        Could not load pending uploads: {{ pendingErr }}
+      </Message>
+      <span v-else-if="pendingList.length === 0" class="muted">
+        No pending uploads.
+      </span>
+      <ul v-else class="pending-list">
+        <li v-for="p in pendingList" :key="`${p.maker}/${p.model}`">
+          <strong>{{ p.maker }}</strong> {{ p.model }}
+        </li>
+      </ul>
+    </Dialog>
 
     <Message
       v-if="stats && !stats.ready"
@@ -82,5 +141,22 @@ onMounted(async () => {
 }
 .cta {
   margin: 0.5rem 0 1.5rem;
+}
+.stat-action {
+  margin-left: auto;
+}
+.pending-hint {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+.pending-spinner {
+  display: block;
+  width: 2rem;
+  height: 2rem;
+}
+.pending-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  line-height: 1.7;
 }
 </style>
