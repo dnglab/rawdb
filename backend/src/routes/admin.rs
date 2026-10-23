@@ -253,11 +253,18 @@ pub async fn download_pending(
         return Err(AppError::BadRequest("invalid path".into()));
     }
     let key = format!("pending/{upload_id}/{file_path}");
-    if state.s3.head(&key).await.map_err(AppError::Other)?.is_none() {
+    let Some(info) = state.s3.head(&key).await.map_err(AppError::Other)? else {
         return Err(AppError::NotFound);
-    }
+    };
     let filename = file_path.rsplit('/').next().unwrap_or(&file_path);
-    crate::routes::public::serve_download(&state, &key, filename, q.stream.as_deref()).await
+    crate::routes::public::serve_download(
+        &state,
+        &key,
+        filename,
+        Some(info.size),
+        q.stream.as_deref(),
+    )
+    .await
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

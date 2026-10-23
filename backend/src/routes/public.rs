@@ -574,6 +574,7 @@ pub async fn download(
     State(state): State<AppState>,
     Path((maker, model, file_path)): Path<(String, String, String)>,
     Query(q): Query<DownloadQuery>,
+    method: axum::http::Method,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> AppResult<Response> {
@@ -600,26 +601,29 @@ pub async fn download(
     }
 
     // Verify the file exists in the approved cache before producing a
-    // presigned URL or opening a stream — keeps misses cheap.
+    // presigned URL or opening a stream — keeps misses cheap. The cached
+    // size feeds the download-bytes metric without an S3 round-trip.
     let conn = state
         .db
         .reader()
         .get()
         .map_err(|e| AppError::Other(e.into()))?;
-    let exists: bool = conn
+    let size: Option<u64> = conn
         .query_row(
-            "SELECT 1 FROM files WHERE maker = ? AND model = ? AND path = ?",
+            "SELECT size FROM files WHERE maker = ? AND model = ? AND path = ?",
             rusqlite::params![&maker, &model, &file_path],
-            |_| Ok(true),
+            |r| Ok(r.get::<_, i64>(0)?.max(0) as u64),
         )
-        .unwrap_or(false);
-    if !exists {
+        .ok();
+    let Some(size) = size else {
         return Err(AppError::NotFound);
-    }
+    };
 
     let s3_key = format!("samples/{maker}/{model}/{file_path}");
     let filename = file_path.rsplit('/').next().unwrap_or(&file_path);
-    serve_download(&state, &s3_key, filename, q.stream.as_deref()).await
+    // HEAD (link checkers, crawlers) transfers no body — don't count bytes.
+    let counted = (method != axum::http::Method::HEAD).then_some(size);
+    serve_download(&state, &s3_key, filename, counted, q.stream.as_deref()).await
 }
 
 /// Shared download dispatcher honoring `RAWDB_DOWNLOAD_MODE`:
@@ -627,10 +631,14 @@ pub async fn download(
 /// - **`stream`** → backend proxies the bytes from S3 to the client.
 /// - **`either`** → presigned by default; client passes `?stream=1` to
 ///   opt in to streaming.
+///
+/// `size` is the object size recorded in the download-bytes metric; `None`
+/// skips it (e.g. for HEAD requests).
 pub(crate) async fn serve_download(
     state: &AppState,
     key: &str,
     filename: &str,
+    size: Option<u64>,
     stream_param: Option<&str>,
 ) -> AppResult<Response> {
     use crate::config::DownloadMode;
@@ -645,6 +653,16 @@ pub(crate) async fn serve_download(
         .metrics
         .http_samples
         .add(1, &[opentelemetry::KeyValue::new("mode", "download")]);
+    // Approximation for presigned: the bytes go client <-> S3, so we count
+    // the full object size assuming the redirect is followed. Aborted
+    // transfers and resumes via this endpoint (counted again) skew it.
+    if let Some(size) = size {
+        let delivery = if want_stream { "stream" } else { "presigned" };
+        state
+            .metrics
+            .download_bytes
+            .add(size, &[opentelemetry::KeyValue::new("delivery", delivery)]);
+    }
     if !want_stream {
         let url = state
             .s3
