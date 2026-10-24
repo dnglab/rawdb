@@ -129,7 +129,7 @@ pub fn respond(cached: &Cached, headers: &HeaderMap, cache_control: &'static str
 }
 
 /// Weak comparison (RFC 9110): `W/` prefixes are ignored; `*` matches.
-fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
+pub(crate) fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
     let ours = etag.trim_start_matches("W/");
     headers
         .get_all(IF_NONE_MATCH)

@@ -739,7 +739,7 @@ fn client_ip(
     peer.ip()
 }
 
-fn percent_encode_filename(name: &str) -> String {
+pub(crate) fn percent_encode_filename(name: &str) -> String {
     use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
     // RFC 5987 attr-char: anything outside this gets percent-encoded.
     const SET: &AsciiSet = &CONTROLS

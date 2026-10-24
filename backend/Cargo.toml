@@ -78,6 +78,17 @@ mime_guess = "2"
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"] }
 
+# Reviewer previews (embedded preview / thumbnail of pending RAW files).
+# Pinned to the relax_decoder_new branch (dnglab PR #881): get_decoder()
+# succeeds for cameras missing in rawler's camera database, so previews
+# work for not-yet-supported cameras. Switch to the crates.io release once
+# the PR has landed.
+rawler = { git = "https://github.com/cytrinox/dnglab", rev = "8cda89aec5aec406eda7df696aa60c432656ea1e" }
+# Same major version as rawler, whose decoders return `image::DynamicImage`.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# setrlimit() in the preview worker process.
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 

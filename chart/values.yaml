@@ -93,6 +93,31 @@ config:
   feedPublishedTitle: "RawDB — published samples"
   feedPendingTitle: "RawDB — pending uploads"
 
+  # Reviewer previews: "Load previews" on the review page extracts each
+  # pending file's embedded preview (or thumbnail) with rawler in a
+  # short-lived worker process and caches the JPEG on local disk.
+  preview:
+    # Downloads and cached previews. Empty = `<cacheDir>/previews`, i.e.
+    # the cache volume, which then needs room for up to
+    # maxFileBytes × concurrency of in-flight downloads.
+    dir: ""
+    # How long an extracted preview stays cached.
+    cacheTtlSecs: 3600
+    # Longest edge of a served preview in pixels; 0 = embedded size.
+    maxDim: 2048
+    # Previews extracted at the same time, per pod. Each runs a worker of
+    # up to workerMemoryBytes; raise resources.limits.memory by that much
+    # for every additional one.
+    concurrency: 1
+    # Larger files get no preview and are never downloaded for one.
+    maxFileBytes: 1073741824
+    # A worker running longer than this is killed.
+    timeoutSecs: 60
+    # Memory limit (RLIMIT_DATA) of one worker; a preview needing more
+    # fails with an error instead of OOM-killing the pod. 320 MiB fits one
+    # worker next to the server within the default 512Mi. 0 = no limit.
+    workerMemoryBytes: 335544320
+
   s3:
     bucket: ""
     # Set for non-AWS S3 backends (Garage, R2, B2, …). Empty = AWS.

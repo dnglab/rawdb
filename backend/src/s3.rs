@@ -230,6 +230,90 @@ impl S3 {
         })
     }
 
+    /// Download an object into a local file. Like checksum verification,
+    /// a broken stream is resumed with a ranged GET — large objects can
+    /// outlive a single connection. Fails unless exactly `expected_len`
+    /// bytes arrive. The file is synced to disk before returning.
+    pub async fn download_to_file(
+        &self,
+        key: &str,
+        path: &std::path::Path,
+        expected_len: u64,
+    ) -> Result<u64, S3Error> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        const MAX_RETRIES: u32 = 5;
+        const BUF_SIZE: usize = 1024 * 1024;
+
+        let io_err = |op: &str, e: std::io::Error| {
+            S3Error::Other(anyhow::anyhow!("{op} {}: {e}", path.display()))
+        };
+        let mut file = tokio::fs::File::create(path)
+            .await
+            .map_err(|e| io_err("create", e))?;
+        let mut buf = vec![0u8; BUF_SIZE];
+        let mut written: u64 = 0;
+        let mut attempt: u32 = 0;
+
+        'object: loop {
+            // A stream can break after its last byte; a ranged GET at the
+            // end of the object would then fail with 416.
+            if written > 0 && written >= expected_len {
+                break;
+            }
+            let start = (written > 0).then_some(written);
+            let stream = match self.get_stream_range(key, start).await {
+                Ok(s) => s,
+                Err(e @ (S3Error::NotFound(_) | S3Error::PreconditionFailed)) => return Err(e),
+                Err(S3Error::Other(e)) => {
+                    attempt += 1;
+                    if attempt > MAX_RETRIES {
+                        return Err(S3Error::Other(e.context(format!("open {key} at {written}"))));
+                    }
+                    tracing::warn!(
+                        error = %e, key, attempt, written,
+                        "download: reopen failed, retrying",
+                    );
+                    tokio::time::sleep(Duration::from_millis(200u64 << attempt.min(5))).await;
+                    continue 'object;
+                }
+            };
+            let mut reader = stream.body.into_async_read();
+            loop {
+                match reader.read(&mut buf).await {
+                    Ok(0) => break 'object,
+                    Ok(n) => {
+                        file.write_all(&buf[..n])
+                            .await
+                            .map_err(|e| io_err("write", e))?;
+                        written += n as u64;
+                    }
+                    Err(e) => {
+                        attempt += 1;
+                        if attempt > MAX_RETRIES {
+                            return Err(S3Error::Other(anyhow::anyhow!(
+                                "read {key} at {written}: {e}"
+                            )));
+                        }
+                        tracing::warn!(
+                            error = %e, key, attempt, written,
+                            "download: stream broke, resuming",
+                        );
+                        tokio::time::sleep(Duration::from_millis(200u64 << attempt.min(5))).await;
+                        continue 'object;
+                    }
+                }
+            }
+        }
+        if written != expected_len {
+            return Err(S3Error::Other(anyhow::anyhow!(
+                "download {key}: got {written} bytes, expected {expected_len}"
+            )));
+        }
+        file.sync_all().await.map_err(|e| io_err("sync", e))?;
+        Ok(written)
+    }
+
     /// Fetch a small object entirely into memory. Suitable for `rawdb-meta.toml`
     /// and `_system/users.toml`. Returns `(bytes, etag)`.
     pub async fn get_bytes(&self, key: &str) -> Result<(Vec<u8>, Option<String>), S3Error> {

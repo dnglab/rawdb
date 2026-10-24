@@ -16,6 +16,7 @@ mod error;
 mod events;
 mod meta;
 mod openapi;
+mod preview;
 mod ratelimit;
 mod routes;
 mod s3;
@@ -35,8 +36,18 @@ use crate::state::AppMetrics;
 const CRATE_NAME: &str = env!("CARGO_CRATE_NAME");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+fn main() -> Result<()> {
+    // A preview worker is this binary re-executed with a hidden first
+    // argument. It exits before any server setup: no runtime, logging,
+    // TLS provider or config (it runs with an empty environment).
+    if let Some(code) = preview::worker::run_if_requested() {
+        std::process::exit(code);
+    }
+    serve()
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn serve() -> Result<()> {
     // Pin the rustls CryptoProvider before any TLS user runs. Both
     // aws-lc-rs (via the AWS SDK) and ring end up linked into the binary,
     // and rustls 0.23 refuses to pick a default at runtime when more than
@@ -72,6 +83,12 @@ async fn main() -> Result<()> {
     let db = Db::open(&config.cache_dir)?;
     let s3 = S3::from_config(&config).await?;
     let metrics = Arc::new(AppMetrics::new());
+    let previews = Arc::new(preview::Previews::new(
+        &config,
+        metrics.preview_lookups.clone(),
+        metrics.preview_duration_s.clone(),
+    )?);
+    previews.clone().spawn_sweeper();
     // Initialize the k8s Event recorder before the scanner so the
     // scanner can emit ScanError events; outside a cluster this no-ops.
     let events = events::RawdbEvents::init().await;
@@ -133,6 +150,7 @@ async fn main() -> Result<()> {
         downloads,
         events,
         sync_ticks,
+        previews,
     };
 
     let app = routes::build_router(state.clone());

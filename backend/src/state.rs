@@ -13,6 +13,7 @@ use crate::cache::responses::ResponseCache;
 use crate::cache::scanner::Scanner;
 use crate::config::Config;
 use crate::events::RawdbEvents;
+use crate::preview::Previews;
 use crate::ratelimit::DownloadRateLimiter;
 use crate::s3::S3;
 use crate::sync_tick::TickState;
@@ -41,6 +42,8 @@ pub struct AppState {
     /// [`crate::sync_tick::bump`] (writer) and the watcher loop
     /// (reader). See [`crate::sync_tick`].
     pub sync_ticks: Arc<TickState>,
+    /// Reviewer previews of pending files (rawler worker + disk cache).
+    pub previews: Arc<Previews>,
 }
 
 impl AppState {
@@ -67,6 +70,10 @@ pub struct AppMetrics {
   pub scan_duration_s: Histogram<f64>,
   /// Response-cache lookups, labelled `cache` (endpoint) and `result` (hit/miss).
   pub response_cache: Counter<u64>,
+  /// Reviewer-preview requests, labelled `result` (hit/miss/error).
+  pub preview_lookups: Counter<u64>,
+  /// Download + worker time per preview extraction.
+  pub preview_duration_s: Histogram<f64>,
 }
 impl AppMetrics {
   pub fn new() -> Self {
@@ -117,6 +124,16 @@ impl AppMetrics {
       response_cache: meter
         .u64_counter("rawdb.response_cache.lookups")
         .with_description("Response cache lookups by cache and result")
+        .build(),
+      preview_lookups: meter
+        .u64_counter("rawdb.preview.lookups")
+        .with_description("Reviewer preview requests by result (hit: cached, miss: extracted, error: internal failure)")
+        .build(),
+      preview_duration_s: meter
+        .f64_histogram("rawdb.preview.duration")
+        .with_unit("s")
+        .with_boundaries(vec![0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0])
+        .with_description("Download + worker time per preview extraction")
         .build(),
     }
   }

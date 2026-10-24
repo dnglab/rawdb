@@ -83,6 +83,19 @@
         "feedLimit": { "type": "integer", "minimum": 1 },
         "feedPublishedTitle": { "type": "string", "minLength": 1 },
         "feedPendingTitle": { "type": "string", "minLength": 1 },
+        "preview": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dir": { "type": "string" },
+            "cacheTtlSecs": { "type": "integer", "minimum": 1 },
+            "maxDim": { "type": "integer", "minimum": 0 },
+            "concurrency": { "type": "integer", "minimum": 1 },
+            "maxFileBytes": { "type": "integer", "minimum": 0 },
+            "timeoutSecs": { "type": "integer", "minimum": 1 },
+            "workerMemoryBytes": { "type": "integer", "minimum": 0 }
+          }
+        },
         "s3": {
           "type": "object",
           "additionalProperties": false,

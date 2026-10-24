@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
 import { useConfirm } from 'primevue/useconfirm';
@@ -15,6 +15,17 @@ const confirm = useConfirm();
 // `reviewer` edits the upload; `approver` decides on it (approve/reject).
 const { canEditPending, canApprove } = useAuth();
 
+interface PreviewState {
+  status: 'loading' | 'ok' | 'error';
+  /// Object URL of the fetched JPEG ('ok').
+  src?: string;
+  /// Why there is no preview ('error').
+  message?: string;
+  /// The "Preview image" panel was collapsed. Unset on every new state,
+  /// so a freshly loaded preview starts expanded.
+  collapsed?: boolean;
+}
+
 interface EditFileRow {
   old_path: string;
   prefix: string;
@@ -28,6 +39,8 @@ interface EditFileRow {
   sha256: string | null;
   /// Latest verify result for this row: 'ok' / 'mismatch' / 'missing' / null.
   verify: 'ok' | 'mismatch' | 'missing' | null;
+  /// Embedded preview, once "Load previews" was clicked.
+  preview: PreviewState | null;
 }
 
 const setForm = reactive({
@@ -55,6 +68,12 @@ const verifyResult = ref<{
   missing: number;
 } | null>(null);
 const conflict = ref<'refuse' | 'merge' | 'replace'>('refuse');
+// Set once "Load previews" was clicked; a reload (e.g. after save) then
+// also fetches previews of renamed files.
+const previewsRequested = ref(false);
+const loadingPreviews = computed(() =>
+  files.value.some((f) => f.preview?.status === 'loading'),
+);
 
 const conflictOptions = [
   { label: 'Refuse if exists', value: 'refuse' },
@@ -93,6 +112,9 @@ async function load() {
     setForm.uploaded_at = d.uploaded_at;
     setForm.notes = d.notes ?? '';
     setForm.special = d.special;
+    // Keep loaded previews across a reload (e.g. after save) for files
+    // whose stored path didn't change.
+    const previews = new Map(files.value.map((r) => [r.old_path, r.preview]));
     files.value = d.files.map((f) => {
       const { prefix, filename } = splitPath(f.path);
       return {
@@ -106,9 +128,15 @@ async function load() {
         selected: true,
         sha256: f.sha256 ?? null,
         verify: null,
+        preview: previews.get(f.path) ?? null,
       };
     });
+    const kept = new Set(d.files.map((f) => f.path));
+    for (const [path, p] of previews) {
+      if (!kept.has(path)) revokePreview(p);
+    }
     loaded.value = true;
+    if (previewsRequested.value) void loadPreviews();
   } catch (e) {
     err.value = String(e);
   } finally {
@@ -118,6 +146,55 @@ async function load() {
 
 function downloadHref(r: EditFileRow): string {
   return api.adminPendingDownloadUrl(props.upload_id, r.old_path);
+}
+
+function previewHref(r: EditFileRow): string {
+  return api.adminPendingPreviewUrl(props.upload_id, r.old_path);
+}
+
+function revokePreview(p: PreviewState | null | undefined) {
+  if (p?.src) URL.revokeObjectURL(p.src);
+}
+
+// The whole "Preview image" header toggles, not just PrimeVue's small button.
+function onPreviewHeaderClick(e: MouseEvent, r: EditFileRow) {
+  if ((e.target as HTMLElement).closest('button') || !r.preview) return;
+  r.preview.collapsed = !r.preview.collapsed;
+}
+
+// Parallel preview requests. The server extracts only a few at a time
+// anyway; a small pool keeps the browser's per-host connections free for
+// Save/Approve and fills the rows top to bottom.
+const PREVIEW_PARALLEL = 2;
+
+async function loadPreviews() {
+  previewsRequested.value = true;
+  // Fetch missing and failed previews; rows still loading are already on
+  // their way.
+  const rows = files.value.filter(
+    (r) => !r.preview || r.preview.status === 'error',
+  );
+  for (const r of rows) r.preview = { status: 'loading' };
+  const queue = rows.map((r) => r.old_path);
+  const next = async () => {
+    for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
+      let result: PreviewState;
+      try {
+        const blob = await api.adminPendingPreview(props.upload_id, path);
+        result = { status: 'ok', src: URL.createObjectURL(blob) };
+      } catch (e) {
+        result = {
+          status: 'error',
+          message: e instanceof Error ? e.message : String(e),
+        };
+      }
+      // Look the row up again: a save may have reloaded or renamed it.
+      const r = files.value.find((f) => f.old_path === path);
+      if (r) r.preview = result;
+      else revokePreview(result);
+    }
+  };
+  await Promise.all(Array.from({ length: PREVIEW_PARALLEL }, next));
 }
 
 function buildEdit(): PendingEdit {
@@ -174,6 +251,7 @@ function removeRow(index: number) {
     rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
     acceptProps: { label: 'Remove', severity: 'danger' },
     accept: () => {
+      revokePreview(files.value[index]?.preview);
       files.value.splice(index, 1);
     },
   });
@@ -328,6 +406,7 @@ async function downloadAll() {
 }
 
 onMounted(load);
+onBeforeUnmount(() => files.value.forEach((r) => revokePreview(r.preview)));
 </script>
 
 <template>
@@ -424,6 +503,16 @@ onMounted(load);
               outlined
               :loading="verifying"
               @click="verifyChecksums"
+            />
+            <Button
+              label="Load previews"
+              icon="pi pi-image"
+              size="small"
+              severity="secondary"
+              outlined
+              :loading="loadingPreviews"
+              :disabled="files.length === 0"
+              @click="loadPreviews"
             />
           </div>
         </template>
@@ -544,6 +633,42 @@ onMounted(load);
                 icon="pi pi-question"
               />
             </div>
+            <Panel
+              v-if="r.preview"
+              v-model:collapsed="r.preview.collapsed"
+              header="Preview image"
+              toggleable
+              class="preview"
+              :pt="{
+                header: {
+                  onClick: (e: MouseEvent) => onPreviewHeaderClick(e, r),
+                },
+              }"
+            >
+              <Skeleton
+                v-if="r.preview.status === 'loading'"
+                width="100%"
+                height="14rem"
+              />
+              <a
+                v-else-if="r.preview.status === 'ok'"
+                :href="previewHref(r)"
+                target="_blank"
+                rel="noopener"
+                title="Open preview in a new tab"
+              >
+                <img :src="r.preview.src" :alt="`Preview of ${r.old_path}`" />
+              </a>
+              <Message
+                v-else
+                severity="warn"
+                size="small"
+                variant="simple"
+                icon="pi pi-eye-slash"
+              >
+                No preview: {{ r.preview.message }}
+              </Message>
+            </Panel>
             <Divider v-if="i < files.length - 1" />
           </div>
         </template>
@@ -700,6 +825,20 @@ onMounted(load);
 .hash .hash-prefix {
   margin-right: 0.4rem;
   opacity: 0.7;
+}
+.preview {
+  margin-top: 0.5rem;
+}
+.preview :deep(.p-panel-header) {
+  cursor: pointer;
+  user-select: none;
+}
+.preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--p-border-radius-md);
+  cursor: zoom-in;
 }
 .mb {
   margin-bottom: 0.75rem;

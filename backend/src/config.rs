@@ -221,6 +221,64 @@ pub struct Config {
     #[arg(long, env = "RAWDB_FEED_PENDING_TITLE", default_value = "RawDB — pending uploads")]
     pub feed_pending_title: String,
 
+    // ---- Reviewer previews ----------------------------------------------------
+    // `GET /api/admin/pending/{upload_id}/preview/{path}` downloads the file
+    // from S3, extracts its embedded preview (or thumbnail) with rawler in a
+    // separate worker process and caches the resulting JPEG on local disk.
+    /// Directory for preview downloads (`work/`) and cached results
+    /// (`cache/`). Defaults to `<RAWDB_CACHE_DIR>/previews`. In-flight
+    /// downloads need up to `RAWDB_PREVIEW_MAX_FILE_BYTES` ×
+    /// `RAWDB_PREVIEW_CONCURRENCY` of free space here.
+    #[arg(long, env = "RAWDB_PREVIEW_DIR")]
+    pub preview_dir: Option<PathBuf>,
+
+    /// How long an extracted preview stays cached, in seconds. Default 3600.
+    #[arg(
+        long,
+        env = "RAWDB_PREVIEW_CACHE_TTL_SECS",
+        default_value_t = 3600,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub preview_cache_ttl_secs: u64,
+
+    /// Longest edge of a served preview, in pixels; larger embedded
+    /// previews are downscaled. `0` keeps the embedded size. Default 2048.
+    #[arg(long, env = "RAWDB_PREVIEW_MAX_DIM", default_value_t = 2048)]
+    pub preview_max_dim: u32,
+
+    /// Previews extracted at the same time, per instance. Each one runs a
+    /// worker process of up to `RAWDB_PREVIEW_WORKER_MEMORY_BYTES`, so raise
+    /// the container memory limit along with this. Default 1.
+    #[arg(
+        long,
+        env = "RAWDB_PREVIEW_CONCURRENCY",
+        default_value_t = 1,
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub preview_concurrency: u32,
+
+    /// Files larger than this (bytes) get no preview and are never
+    /// downloaded for one. Default 1 GiB.
+    #[arg(long, env = "RAWDB_PREVIEW_MAX_FILE_BYTES", default_value_t = 1024 * 1024 * 1024)]
+    pub preview_max_file_bytes: u64,
+
+    /// Wall-clock limit for one preview worker, in seconds; the worker is
+    /// killed when it runs longer. Default 60.
+    #[arg(
+        long,
+        env = "RAWDB_PREVIEW_TIMEOUT_SECS",
+        default_value_t = 60,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub preview_timeout_secs: u64,
+
+    /// Memory limit (`RLIMIT_DATA`, bytes) of a preview worker. A file
+    /// whose preview needs more fails with an error instead of pushing the
+    /// container into the OOM killer. `0` disables the limit. Default
+    /// 320 MiB, which fits one worker next to the server within 512 MiB.
+    #[arg(long, env = "RAWDB_PREVIEW_WORKER_MEMORY_BYTES", default_value_t = 320 * 1024 * 1024)]
+    pub preview_worker_memory_bytes: u64,
+
     // ---- OpenAPI docs ---------------------------------------------------------
     /// Serve interactive OpenAPI docs at `/docs` and the spec at
     /// `/openapi.json`. Defaults to enabled — disable in locked-down
@@ -329,6 +387,13 @@ impl Config {
         self.github_client_id.is_some()
             && self.github_client_secret.is_some()
             && self.github_redirect_url.is_some()
+    }
+
+    /// `RAWDB_PREVIEW_DIR`, or `previews/` inside the cache dir.
+    pub fn preview_dir(&self) -> PathBuf {
+        self.preview_dir
+            .clone()
+            .unwrap_or_else(|| self.cache_dir.join("previews"))
     }
 
     pub fn oidc_enabled(&self) -> bool {

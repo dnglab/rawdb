@@ -9,7 +9,8 @@
 //! - `admin`: everything, plus user management.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -22,6 +23,7 @@ use crate::auth::{
 };
 use crate::error::{AppError, AppResult};
 use crate::meta::{self, FileMeta, RawdbMeta, SetMeta};
+use crate::preview::PreviewError;
 use crate::s3::S3Error;
 use crate::state::AppState;
 use crate::users::{cas_update, User, UsersError};
@@ -36,6 +38,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/pending/:upload_id/download/*path",
             get(download_pending),
+        )
+        .route(
+            "/pending/:upload_id/preview/*path",
+            get(preview_pending),
         )
         .route("/pending/:upload_id/approve", post(approve_pending))
         .route("/pending/:upload_id/reject", post(reject_pending))
@@ -1476,6 +1482,76 @@ pub async fn verify_pending(
         missing,
         files: out,
     }))
+}
+
+// ---- previews ---------------------------------------------------------------
+
+/// Embedded preview (else the thumbnail) of one file in a pending upload,
+/// as JPEG with the long edge capped at `RAWDB_PREVIEW_MAX_DIM`. Extracted
+/// with rawler, which reads previews also from cameras it can't decode
+/// yet, and cached per instance for `RAWDB_PREVIEW_CACHE_TTL_SECS`. The
+/// first request downloads the file from S3, so it may take a while.
+#[utoipa::path(
+    get,
+    path = "/api/admin/pending/{upload_id}/preview/{path}",
+    tag = "admin",
+    security(("session_cookie" = [])),
+    params(
+        ("upload_id" = String, Path, description = "Upload ID"),
+        ("path" = String, Path, description = "Relative file path within the upload"),
+    ),
+    responses(
+        (status = 200, description = "JPEG preview", content_type = "image/jpeg"),
+        (status = 304, description = "Not modified (`If-None-Match`)"),
+        (status = 404, description = "File not found"),
+        (status = 422, description = "No preview: not a RAW format, too large, or the decoder found or produced none"),
+    ),
+)]
+pub async fn preview_pending(
+    _auth: AuthGuard<PENDING_VIEWERS>,
+    State(state): State<AppState>,
+    Path((upload_id, file_path)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    if file_path.contains("..") {
+        return Err(AppError::BadRequest("invalid path".into()));
+    }
+    let key = format!("pending/{upload_id}/{file_path}");
+    let filename = file_path.rsplit('/').next().unwrap_or(&file_path);
+    let preview = state
+        .previews
+        .get(&state.s3, &key, filename)
+        .await
+        .map_err(|e| match e {
+            PreviewError::NotFound => AppError::NotFound,
+            PreviewError::Unavailable(reason) => AppError::Unprocessable(reason),
+            PreviewError::Other(e) => AppError::Other(e),
+        })?;
+
+    let etag = format!("\"{}\"", preview.id);
+    let cache_control = format!("private, max-age={}", preview.fresh_for.as_secs());
+    if crate::cache::responses::if_none_match(&headers, &etag) {
+        return Ok((
+            StatusCode::NOT_MODIFIED,
+            [(ETAG, etag), (CACHE_CONTROL, cache_control)],
+        )
+            .into_response());
+    }
+    let stem = filename.rsplit_once('.').map_or(filename, |(stem, _)| stem);
+    let disposition = format!(
+        "inline; filename*=UTF-8''{}.preview.jpg",
+        crate::routes::public::percent_encode_filename(stem)
+    );
+    Ok((
+        [
+            (CONTENT_TYPE, "image/jpeg".to_string()),
+            (ETAG, etag),
+            (CACHE_CONTROL, cache_control),
+            (CONTENT_DISPOSITION, disposition),
+        ],
+        preview.jpeg,
+    )
+        .into_response())
 }
 
 /// Best-effort load of the existing `rawdb-meta.toml` under `prefix`,

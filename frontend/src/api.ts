@@ -262,6 +262,11 @@ export interface SetEdit {
 
 const enc = encodeURIComponent;
 
+function pendingPreviewUrl(uploadId: string, path: string): string {
+  const parts = path.split('/').map(enc).join('/');
+  return `/api/admin/pending/${enc(uploadId)}/preview/${parts}`;
+}
+
 export const api = {
   stats: () => fetchJSON<Stats>('/api/stats'),
   listSets: (params: SearchParams = {}) =>
@@ -333,6 +338,16 @@ export const api = {
   adminPendingDownloadUrl: (uploadId: string, path: string): string => {
     const parts = path.split('/').map(enc).join('/');
     return `/api/admin/pending/${enc(uploadId)}/download/${parts}`;
+  },
+  adminPendingPreviewUrl: (uploadId: string, path: string): string =>
+    pendingPreviewUrl(uploadId, path),
+  /// JPEG of the file's embedded preview. Rejects with the server's reason
+  /// (e.g. not a RAW format, no embedded preview) when there is none.
+  adminPendingPreview: async (uploadId: string, path: string): Promise<Blob> => {
+    const url = pendingPreviewUrl(uploadId, path);
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw await errorFromResponse(url, res);
+    return res.blob();
   },
   adminSetEdit: (maker: string, model: string, edit: SetEdit) =>
     putJSONNoBody(

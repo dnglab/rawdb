@@ -24,6 +24,11 @@ pub enum AppError {
     #[error("payload too large: {0}")]
     PayloadTooLarge(String),
 
+    /// The request is well-formed but the target can't be processed, e.g.
+    /// a file without an extractable preview.
+    #[error("unprocessable: {0}")]
+    Unprocessable(String),
+
     #[error("too many requests")]
     TooManyRequests {
         /// Seconds the client should wait before retrying; emitted as the
@@ -57,6 +62,7 @@ impl IntoResponse for AppError {
             AppError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             AppError::PayloadTooLarge(m) => (StatusCode::PAYLOAD_TOO_LARGE, m.clone()),
+            AppError::Unprocessable(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
             // Handled by the early return above; keeps the match exhaustive.
             AppError::TooManyRequests { .. } => unreachable!(),
             AppError::Other(e) => {
