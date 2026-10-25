@@ -2,8 +2,6 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{header::CONTENT_TYPE, StatusCode};
 use axum::response::Response;
-use axum::routing::get;
-use axum::Router;
 use opentelemetry::KeyValue;
 use prometheus::{Encoder, TextEncoder};
 

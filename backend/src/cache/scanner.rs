@@ -34,7 +34,7 @@ use crate::config::Config;
 use crate::events::RawdbEvents;
 use crate::meta::{self, FileMeta, RawdbMeta};
 use crate::s3::{ObjectInfo, S3};
-use crate::state::{AppMetrics, AppState};
+use crate::state::AppMetrics;
 
 pub const SAMPLES_PREFIX: &str = "samples/";
 pub const PENDING_PREFIX: &str = "pending/";

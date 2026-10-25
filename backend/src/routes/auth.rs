@@ -12,7 +12,7 @@ use serde_json::json;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::auth::{
-    clear_cookie_header, decode_session, encode_session, set_cookie_header, verify_admin_password,
+    decode_session, encode_session, set_cookie_header, verify_admin_password,
     SessionExtractor, BOOTSTRAP_SUB, OIDC_SOURCE, PASSWORD_SOURCE, ROLE_ADMIN,
 };
 use crate::config::OidcSubFormat;
@@ -214,7 +214,6 @@ pub async fn methods(State(state): State<AppState>) -> Json<AuthMethodsResponse>
 )]
 #[cfg(feature = "oidc")]
 pub async fn oidc_start_stub(State(state): State<AppState>) -> Response {
-    use crate::auth_oidc::PendingFlow;
     use jsonwebtoken::{encode, EncodingKey, Header};
 
     let Some(oidc) = state.oidc.clone() else {
@@ -275,7 +274,7 @@ pub async fn oidc_callback_stub(
     headers: axum::http::HeaderMap,
 ) -> Response {
     use crate::auth_oidc::PendingFlow;
-    use crate::users::{cas_update, User, UsersError};
+    use crate::users::{cas_update, User};
     use jsonwebtoken::{decode, DecodingKey, Validation};
 
     let Some(oidc) = state.oidc.clone() else {
