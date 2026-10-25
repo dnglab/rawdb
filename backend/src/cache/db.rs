@@ -555,26 +555,24 @@ impl Db {
             let mut bound: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
             bound.push(&limit);
             bound.push(&offset);
-            let rows = stmt
-                .query_map(rusqlite::params_from_iter(bound), |r| {
-                    Ok(SetSummary {
-                        maker: r.get(0)?,
-                        model: r.get(1)?,
-                        license: r.get(2)?,
-                        notes: r.get(3)?,
-                        uploaded_at: r
-                            .get::<_, Option<String>>(4)?
-                            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                            .map(|d| d.with_timezone(&Utc)),
-                        uploaded_by: r.get(5)?,
-                        file_count: r.get::<_, i64>(6)?.max(0) as u64,
-                        total_size: r.get::<_, i64>(7)?.max(0) as u64,
-                        special: r.get::<_, i64>(8)? != 0,
-                        tags: Vec::new(),
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            rows
+            stmt.query_map(rusqlite::params_from_iter(bound), |r| {
+                Ok(SetSummary {
+                    maker: r.get(0)?,
+                    model: r.get(1)?,
+                    license: r.get(2)?,
+                    notes: r.get(3)?,
+                    uploaded_at: r
+                        .get::<_, Option<String>>(4)?
+                        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|d| d.with_timezone(&Utc)),
+                    uploaded_by: r.get(5)?,
+                    file_count: r.get::<_, i64>(6)?.max(0) as u64,
+                    total_size: r.get::<_, i64>(7)?.max(0) as u64,
+                    special: r.get::<_, i64>(8)? != 0,
+                    tags: Vec::new(),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
         };
 
         // Distinct file tags per set — fetched only for the page. Sets have

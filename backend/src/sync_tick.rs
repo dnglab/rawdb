@@ -243,19 +243,19 @@ async fn poll_once(s3: &S3, sync_ticks: &TickState) -> anyhow::Result<HashSet<Do
 /// Sequentially run the scanner passes mapped to the changed domains.
 /// Errors in one pass don't abort the others.
 async fn run_passes(scanner: &Scanner, domains: &HashSet<Domain>) {
-    if domains.contains(&Domain::Pending) {
-        if let Err(e) = scanner.run_pending_pass().await {
-            tracing::error!(error = %format!("{e:#}"), "sync-tick pending pass failed");
-        }
+    if domains.contains(&Domain::Pending)
+        && let Err(e) = scanner.run_pending_pass().await
+    {
+        tracing::error!(error = %format!("{e:#}"), "sync-tick pending pass failed");
     }
-    if domains.contains(&Domain::Sets) {
-        if let Err(e) = scanner.run_samples_pass().await {
-            tracing::error!(error = %format!("{e:#}"), "sync-tick samples pass failed");
-        }
+    if domains.contains(&Domain::Sets)
+        && let Err(e) = scanner.run_samples_pass().await
+    {
+        tracing::error!(error = %format!("{e:#}"), "sync-tick samples pass failed");
     }
-    if domains.contains(&Domain::Users) {
-        if let Err(e) = scanner.run_users_pass().await {
-            tracing::error!(error = %format!("{e:#}"), "sync-tick users pass failed");
-        }
+    if domains.contains(&Domain::Users)
+        && let Err(e) = scanner.run_users_pass().await
+    {
+        tracing::error!(error = %format!("{e:#}"), "sync-tick users pass failed");
     }
 }

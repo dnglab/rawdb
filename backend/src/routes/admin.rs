@@ -356,12 +356,12 @@ pub async fn edit_pending(
             .next()
             .and_then(|n| n.rsplit_once('.'))
             .map(|(_, e)| e.to_ascii_lowercase());
-        if let Some(e) = ext {
-            if blocked.contains(e.as_str()) {
-                return Err(AppError::BadRequest(format!(
-                    "file type not allowed (.{e}): {p}"
-                )));
-            }
+        if let Some(e) = ext
+            && blocked.contains(e.as_str())
+        {
+            return Err(AppError::BadRequest(format!(
+                "file type not allowed (.{e}): {p}"
+            )));
         }
     }
 
@@ -547,12 +547,11 @@ pub async fn edit_set(
             .next()
             .and_then(|n| n.rsplit_once('.'))
             .map(|(_, e)| e.to_ascii_lowercase())
+            && blocked.contains(e.as_str())
         {
-            if blocked.contains(e.as_str()) {
-                return Err(AppError::BadRequest(format!(
-                    "file type not allowed (.{e}): {p}"
-                )));
-            }
+            return Err(AppError::BadRequest(format!(
+                "file type not allowed (.{e}): {p}"
+            )));
         }
     }
 
@@ -871,10 +870,10 @@ pub async fn approve_pending(
     // it explicitly we keep their value; otherwise we copy the pending
     // meta's `LastModified` — the same source the scanner used to fill
     // the pending row.
-    if parsed.set.uploaded_at.is_none() {
-        if let Some(head) = state.s3.head(&meta_key).await.map_err(AppError::Other)? {
-            parsed.set.uploaded_at = head.last_modified;
-        }
+    if parsed.set.uploaded_at.is_none()
+        && let Some(head) = state.s3.head(&meta_key).await.map_err(AppError::Other)?
+    {
+        parsed.set.uploaded_at = head.last_modified;
     }
 
     // Selected subset: explicit list, else all declared files.

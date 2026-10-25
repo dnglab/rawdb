@@ -695,15 +695,15 @@ pub(crate) async fn serve_download(
         .and_then(|v| HeaderValue::from_str(v).ok())
         .unwrap_or_else(|| HeaderValue::from_static("application/octet-stream"));
     h.insert(CONTENT_TYPE, ct);
-    if let Some(len) = s.content_length {
-        if let Ok(v) = HeaderValue::from_str(&len.to_string()) {
-            h.insert(CONTENT_LENGTH, v);
-        }
+    if let Some(len) = s.content_length
+        && let Ok(v) = HeaderValue::from_str(&len.to_string())
+    {
+        h.insert(CONTENT_LENGTH, v);
     }
-    if let Some(etag) = s.etag {
-        if let Ok(v) = HeaderValue::from_str(&format!("\"{etag}\"")) {
-            h.insert(ETAG, v);
-        }
+    if let Some(etag) = s.etag
+        && let Ok(v) = HeaderValue::from_str(&format!("\"{etag}\""))
+    {
+        h.insert(ETAG, v);
     }
     let disp = format!(
         "attachment; filename*=UTF-8''{}",
@@ -724,17 +724,16 @@ fn client_ip(
     headers: &axum::http::HeaderMap,
     peer: std::net::SocketAddr,
 ) -> std::net::IpAddr {
-    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = xff.split(',').next() {
-            if let Ok(ip) = first.trim().parse() {
-                return ip;
-            }
-        }
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+        && let Some(first) = xff.split(',').next()
+        && let Ok(ip) = first.trim().parse()
+    {
+        return ip;
     }
-    if let Some(xri) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        if let Ok(ip) = xri.trim().parse() {
-            return ip;
-        }
+    if let Some(xri) = headers.get("x-real-ip").and_then(|v| v.to_str().ok())
+        && let Ok(ip) = xri.trim().parse()
+    {
+        return ip;
     }
     peer.ip()
 }

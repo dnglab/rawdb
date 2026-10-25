@@ -23,7 +23,6 @@ use axum::http::StatusCode;
 use axum::routing::{post, put};
 use axum::{Json, Router};
 use chrono::Utc;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -526,7 +525,7 @@ pub async fn complete(
 
 fn mint_upload_id() -> String {
     let ts = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let suffix: [u8; 4] = rand::thread_rng().gen();
+    let suffix: [u8; 4] = rand::random();
     let hex = suffix
         .iter()
         .map(|b| format!("{b:02x}"))

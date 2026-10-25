@@ -157,11 +157,11 @@ pub async fn me(
     // For OIDC sessions, refresh role/display from users.toml mirror.
     let mut roles = sess.roles.clone();
     let mut display_name = None;
-    if sess.sub != BOOTSTRAP_SUB {
-        if let Ok(Some(u)) = state.db.get_user(&sess.sub) {
-            roles = u.roles;
-            display_name = u.display_name;
-        }
+    if sess.sub != BOOTSTRAP_SUB
+        && let Ok(Some(u)) = state.db.get_user(&sess.sub)
+    {
+        roles = u.roles;
+        display_name = u.display_name;
     }
     Json(MeResponse {
         sub: sess.sub,
