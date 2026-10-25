@@ -5,6 +5,7 @@ import { api, type Stats } from '../api';
 import SampleBrowser from '../components/SampleBrowser.vue';
 
 const router = useRouter();
+const version = __RAWDB_VERSION__;
 const stats = ref<Stats | null>(null);
 const err = ref<string | null>(null);
 
@@ -39,7 +40,10 @@ async function openPending() {
 <template>
   <section>
     <div class="hero">
-      <h1>RawDB</h1>
+      <div class="hero-title">
+        <h1>RawDB</h1>
+        <Tag v-if="version" :value="version" title="Version" class="version" />
+      </div>
       <p>Community-shared camera RAW sample files for decoder testing.</p>
     </div>
 
@@ -136,6 +140,26 @@ async function openPending() {
 </template>
 
 <style scoped>
+.hero-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.4rem;
+}
+.hero-title h1 {
+  margin: 0;
+}
+/* White with primary text, at 60% of the theme's tag size
+   (0.875rem font, 0.25rem 0.5rem padding). */
+.version {
+  background: var(--p-surface-0);
+  color: var(--p-primary-color);
+  font-family: monospace;
+  font-size: 0.525rem;
+  font-weight: 500;
+  padding: 0.15rem 0.3rem;
+}
 .scan-msg {
   margin-bottom: 1rem;
 }

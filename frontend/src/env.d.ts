@@ -12,3 +12,7 @@ declare module '*.md' {
   const html: string;
   export default html;
 }
+
+// Release version (`git describe` against `vX.Y.Z` tags), set by `define`
+// in vite.config.ts; empty when unknown.
+declare const __RAWDB_VERSION__: string;

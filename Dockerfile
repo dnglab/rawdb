@@ -10,6 +10,11 @@ ARG EXIFTOOL_SHA256=668ea3acececb7235fbd0f4900e72d5f12c9b07e5c778fd36cb1e9b5828f
 FROM node:26.1-slim AS frontend
 WORKDIR /fe
 
+# git reads the release tag for the start page's version badge (below).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN npm install -g corepack@latest && \
     corepack enable && \
     corepack prepare yarn@4.1.0 --activate
@@ -20,8 +25,15 @@ RUN npm install -g corepack@latest && \
 # always present for `yarn build`.
 COPY frontend/package.json frontend/yarn.lock frontend/.yarnrc.yml ./
 COPY frontend/ ./
+# Version shown on the start page: RAWDB_VERSION when passed in, else
+# `git describe` against the vX.Y.Z tags of the build context's .git.
+# Copied rather than bind-mounted so that a new commit or tag invalidates
+# this layer; it stays in this build stage only. Empty hides the badge.
+COPY .git /tmp/rawdb.git
+ARG RAWDB_VERSION
 RUN --mount=type=cache,mode=0777,target=/usr/local/share/.cache/yarn \
-    yarn install --immutable && yarn build
+    export RAWDB_VERSION="${RAWDB_VERSION:-$(git --git-dir=/tmp/rawdb.git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null)}" \
+    && yarn install --immutable && yarn build
 
 # --- Stage 2: backend -----------------------------------------------------------
 FROM rust:1.95.0-alpine3.23 AS backend
