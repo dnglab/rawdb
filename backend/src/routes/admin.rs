@@ -256,6 +256,7 @@ pub async fn download_pending(
     State(state): State<AppState>,
     Path((upload_id, file_path)): Path<(String, String)>,
     axum::extract::Query(q): axum::extract::Query<crate::routes::public::DownloadQuery>,
+    headers: HeaderMap,
 ) -> AppResult<Response> {
     if file_path.contains("..") {
         return Err(AppError::BadRequest("invalid path".into()));
@@ -270,6 +271,7 @@ pub async fn download_pending(
         &key,
         filename,
         Some(info.size),
+        &crate::apikey::metric_username(crate::apikey::lookup(&state.db, &headers)),
         q.stream.as_deref(),
     )
     .await

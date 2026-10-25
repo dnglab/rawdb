@@ -85,19 +85,11 @@ pub fn build_router(state: AppState) -> Router {
 /// `apiservice`-role users.
 async fn track_http(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let method = req.method().as_str().to_owned();
-    // Best-effort label only — if the lookup itself errors (e.g. DB
-    // pool exhausted) we log and fall back to "public" so metrics keep
-    // flowing. The download/export handlers do the same lookup with
-    // *strict* error handling, so the security-relevant decisions
-    // surface the failure as 5xx; this one wouldn't.
-    let username = match crate::apikey::lookup(&state.db, req.headers()) {
-        Ok(Some(u)) => u.sub,
-        Ok(None) => "public".to_owned(),
-        Err(e) => {
-            tracing::error!(error = %e, "apikey lookup failed in metrics middleware");
-            "public".to_owned()
-        }
-    };
+    // Best-effort label only. The download/export handlers do the same
+    // lookup with *strict* error handling, so the security-relevant
+    // decisions surface a failure as 5xx; this one wouldn't.
+    let username =
+        crate::apikey::metric_username(crate::apikey::lookup(&state.db, req.headers()));
     let start = std::time::Instant::now();
     let resp = next.run(req).await;
     let status = resp.status();

@@ -583,13 +583,11 @@ pub async fn download(
     // API key (`X-API-Key`) from an `apiservice`-role user bypasses it.
     // A *lookup error* (DB pool exhausted etc.) is surfaced as 5xx so we
     // never silently downgrade an authenticated request to anonymous.
-    let has_api_key = crate::apikey::lookup(&state.db, &headers)
-        .map_err(|e| {
-            tracing::error!(error = %e, "apikey lookup failed on download");
-            AppError::Other(e)
-        })?
-        .is_some();
-    if state.downloads.enabled() && !has_api_key {
+    let api_user = crate::apikey::lookup(&state.db, &headers).map_err(|e| {
+        tracing::error!(error = %e, "apikey lookup failed on download");
+        AppError::Other(e)
+    })?;
+    if state.downloads.enabled() && api_user.is_none() {
         let ip = client_ip(&headers, peer);
         if let crate::ratelimit::Decision::Limited { retry_after } =
             state.downloads.check(ip, &file_path)
@@ -623,7 +621,8 @@ pub async fn download(
     let filename = file_path.rsplit('/').next().unwrap_or(&file_path);
     // HEAD (link checkers, crawlers) transfers no body — don't count bytes.
     let counted = (method != axum::http::Method::HEAD).then_some(size);
-    serve_download(&state, &s3_key, filename, counted, q.stream.as_deref()).await
+    let username = crate::apikey::metric_username(Ok(api_user));
+    serve_download(&state, &s3_key, filename, counted, &username, q.stream.as_deref()).await
 }
 
 /// Shared download dispatcher honoring `RAWDB_DOWNLOAD_MODE`:
@@ -633,12 +632,14 @@ pub async fn download(
 ///   opt in to streaming.
 ///
 /// `size` is the object size recorded in the download-bytes metric; `None`
-/// skips it (e.g. for HEAD requests).
+/// skips it (e.g. for HEAD requests). `username` labels it, as on the
+/// request metrics (see [`crate::apikey::metric_username`]).
 pub(crate) async fn serve_download(
     state: &AppState,
     key: &str,
     filename: &str,
     size: Option<u64>,
+    username: &str,
     stream_param: Option<&str>,
 ) -> AppResult<Response> {
     use crate::config::DownloadMode;
@@ -658,10 +659,13 @@ pub(crate) async fn serve_download(
     // transfers and resumes via this endpoint (counted again) skew it.
     if let Some(size) = size {
         let delivery = if want_stream { "stream" } else { "presigned" };
-        state
-            .metrics
-            .download_bytes
-            .add(size, &[opentelemetry::KeyValue::new("delivery", delivery)]);
+        state.metrics.download_bytes.add(
+            size,
+            &[
+                opentelemetry::KeyValue::new("delivery", delivery),
+                opentelemetry::KeyValue::new("username", username.to_owned()),
+            ],
+        );
     }
     if !want_stream {
         let url = state

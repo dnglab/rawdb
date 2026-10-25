@@ -61,7 +61,8 @@ pub struct AppMetrics {
   pub http_requests: Counter<u64>,
   pub http_requests_duration_s: Histogram<f64>,
   pub http_samples: Counter<u64>,
-  /// Bytes handed out by downloads, labelled `delivery` (presigned/stream).
+  /// Bytes handed out by downloads, labelled `delivery` (presigned/stream)
+  /// and `username` (API-key owner, else `public`).
   /// Approximate for presigned: counts the object size at redirect time,
   /// assuming the client follows it and fetches the whole file.
   pub download_bytes: Counter<u64>,
@@ -111,7 +112,7 @@ impl AppMetrics {
       download_bytes: meter
         .u64_counter("rawdb.http.samples.download")
         .with_unit("By")
-        .with_description("Bytes handed out by sample downloads (presigned: object size, assumes the client follows the redirect)")
+        .with_description("Bytes handed out by sample downloads, by delivery and username (API-key owner, else public); presigned: object size, assumes the client follows the redirect")
         .build(),
       errors: meter
         .u64_counter("rawdb.core.internal_errors")

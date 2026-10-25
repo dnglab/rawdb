@@ -75,3 +75,19 @@ pub fn lookup(db: &Db, headers: &HeaderMap) -> anyhow::Result<Option<UserRow>> {
     }
     Ok(Some(user))
 }
+
+/// The `username` label of request and download metrics for the result of
+/// [`lookup`]: the API-key owner's `sub`, else `public` (anonymous and
+/// cookie-session traffic alike). Best effort: a failed lookup is logged
+/// and labelled `public`, so metrics keep flowing; handlers whose
+/// behaviour depends on the key surface that error themselves.
+pub fn metric_username(lookup: anyhow::Result<Option<UserRow>>) -> String {
+    match lookup {
+        Ok(Some(user)) => user.sub,
+        Ok(None) => "public".to_owned(),
+        Err(e) => {
+            tracing::error!(error = %e, "apikey lookup failed for metrics label");
+            "public".to_owned()
+        }
+    }
+}
