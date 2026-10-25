@@ -67,6 +67,10 @@ pub struct AppMetrics {
   pub download_bytes: Counter<u64>,
   pub errors: Counter<u64>,
   pub service_up: Gauge<u64>,
+  /// Catalog totals as shown on the Home page, labelled `kind`
+  /// (models/special/files/pending). Every pod reports the same
+  /// catalog-wide numbers, so dashboards aggregate with `max`, not `sum`.
+  pub catalog: Gauge<u64>,
   pub scan_duration_s: Histogram<f64>,
   /// Response-cache lookups, labelled `cache` (endpoint) and `result` (hit/miss).
   pub response_cache: Counter<u64>,
@@ -114,6 +118,10 @@ impl AppMetrics {
         .with_description("Count of internal errors")
         .build(),
       service_up: meter.u64_gauge("rawdb.service.up").with_description("Instance information").build(),
+      catalog: meter
+        .u64_gauge("rawdb.catalog.size")
+        .with_description("Catalog totals by kind (models, special, files, pending); every pod reports the whole catalog, so aggregate across pods with max, not sum")
+        .build(),
 
       scan_duration_s: meter
         .f64_histogram("rawdb.scan.duration")

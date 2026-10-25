@@ -7,6 +7,29 @@ use prometheus::{Encoder, TextEncoder};
 
 use crate::state::AppState;
 
+/// Records the Home page totals from this pod's cache. They describe the
+/// whole catalog, not this pod, so every pod reports the same numbers and
+/// dashboards use `max` across pods. Skipped until the first full scan:
+/// a pod still filling its cache would report too little.
+fn record_catalog(state: &AppState) {
+    if !state.is_ready() {
+        return;
+    }
+    let db = &state.db;
+    let counts = [
+        ("models", db.count_models()),
+        ("special", db.count_special()),
+        ("files", db.count_files()),
+        ("pending", db.count_pending()),
+    ];
+    for (kind, count) in counts {
+        match count {
+            Ok(n) => state.metrics.catalog.record(n, &[KeyValue::new("kind", kind)]),
+            Err(e) => tracing::warn!(kind, error = %format!("{e:#}"), "catalog metric"),
+        }
+    }
+}
+
 /// Prometheus exposition (text format `0.0.4`). Scraped by the operator's
 /// Prometheus / a `ServiceMonitor`. Served on the dedicated metrics
 /// listener (`RAWDB_METRICS_BIND`).
@@ -26,6 +49,7 @@ pub async fn metrics(State(state): State<AppState>) -> std::result::Result<Respo
             KeyValue::new("version", crate::VERSION),
         ],
     );
+    record_catalog(&state);
 
     // Scrape the exporter's own registry — the global `prometheus::gather()`
     // would be empty because nothing is registered there (the OTel exporter
