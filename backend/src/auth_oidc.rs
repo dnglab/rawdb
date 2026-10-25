@@ -139,8 +139,6 @@ mod disabled {
     use crate::config::Config;
 
     pub struct OidcClient;
-    pub struct PendingFlow;
-    pub struct VerifiedIdentity;
 
     impl OidcClient {
         pub async fn from_config(_cfg: &Config) -> anyhow::Result<Option<Self>> {

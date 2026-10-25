@@ -28,6 +28,7 @@ pub struct AppState {
     pub s3: S3,
     pub scanner: Arc<Scanner>,
     /// `None` when OIDC is not configured.
+    #[cfg_attr(not(feature = "oidc"), allow(dead_code))]
     pub oidc: Option<Arc<OidcClient>>,
     /// `None` when GitHub OAuth is not configured.
     pub github: Option<Arc<GithubClient>>,

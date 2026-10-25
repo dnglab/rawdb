@@ -15,7 +15,6 @@ use crate::auth::{
     decode_session, encode_session, set_cookie_header, verify_admin_password,
     SessionExtractor, BOOTSTRAP_SUB, OIDC_SOURCE, PASSWORD_SOURCE, ROLE_ADMIN,
 };
-use crate::config::OidcSubFormat;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -212,8 +211,18 @@ pub async fn methods(State(state): State<AppState>) -> Json<AuthMethodsResponse>
         (status = 404, description = "OIDC not configured"),
     ),
 )]
-#[cfg(feature = "oidc")]
 pub async fn oidc_start_stub(State(state): State<AppState>) -> Response {
+    #[cfg(feature = "oidc")]
+    return oidc_start(state).await;
+    #[cfg(not(feature = "oidc"))]
+    {
+        let _ = state;
+        AppError::NotFound.into_response()
+    }
+}
+
+#[cfg(feature = "oidc")]
+async fn oidc_start(state: AppState) -> Response {
     use jsonwebtoken::{encode, EncodingKey, Header};
 
     let Some(oidc) = state.oidc.clone() else {
@@ -238,13 +247,9 @@ pub async fn oidc_start_stub(State(state): State<AppState>) -> Response {
     resp
 }
 
-#[cfg(not(feature = "oidc"))]
-pub async fn oidc_start_stub(_state: State<AppState>) -> Response {
-    AppError::NotFound.into_response()
-}
-
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
+#[cfg_attr(not(feature = "oidc"), allow(dead_code))]
 pub struct OidcCallbackParams {
     /// Authorization code returned by the IdP.
     pub code: String,
@@ -267,13 +272,28 @@ pub struct OidcCallbackParams {
         (status = 404, description = "OIDC not configured"),
     ),
 )]
-#[cfg(feature = "oidc")]
 pub async fn oidc_callback_stub(
     State(state): State<AppState>,
     Query(q): Query<OidcCallbackParams>,
     headers: axum::http::HeaderMap,
 ) -> Response {
+    #[cfg(feature = "oidc")]
+    return oidc_callback(state, q, headers).await;
+    #[cfg(not(feature = "oidc"))]
+    {
+        let _ = (state, q, headers);
+        AppError::NotFound.into_response()
+    }
+}
+
+#[cfg(feature = "oidc")]
+async fn oidc_callback(
+    state: AppState,
+    q: OidcCallbackParams,
+    headers: axum::http::HeaderMap,
+) -> Response {
     use crate::auth_oidc::PendingFlow;
+    use crate::config::OidcSubFormat;
     use crate::users::{cas_update, User};
     use jsonwebtoken::{decode, DecodingKey, Validation};
 
@@ -362,11 +382,6 @@ pub async fn oidc_callback_stub(
     );
     resp.headers_mut().append(header::SET_COOKIE, clear);
     resp
-}
-
-#[cfg(not(feature = "oidc"))]
-pub async fn oidc_callback_stub(_state: State<AppState>) -> Response {
-    AppError::NotFound.into_response()
 }
 
 // ---- GitHub OAuth 2.0 -----------------------------------------------------
