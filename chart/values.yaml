@@ -93,30 +93,34 @@ config:
   feedPublishedTitle: "RawDB — published samples"
   feedPendingTitle: "RawDB — pending uploads"
 
-  # Reviewer previews: "Load previews" on the review page extracts each
-  # pending file's embedded preview (or thumbnail) with rawler in a
-  # short-lived worker process and caches the JPEG on local disk.
-  preview:
-    # Downloads and cached previews. Empty = `<cacheDir>/previews`, i.e.
-    # the cache volume, which then needs room for up to
+  # Reviewer file inspection: "Load previews" and "Load exiftool" on the
+  # review page download each pending file, run a tool on it (rawler
+  # preview extraction in a short-lived worker process, or exiftool) and
+  # cache the result on local disk.
+  inspect:
+    # Downloads and cached results. Empty = `<cacheDir>/inspect`, i.e. the
+    # cache volume, which then needs room for up to
     # maxFileBytes × concurrency of in-flight downloads.
     dir: ""
-    # How long an extracted preview stays cached.
+    # How long a preview or exiftool listing stays cached.
     cacheTtlSecs: 3600
+    # Files inspected at the same time, per pod. Each runs a tool process
+    # of up to memoryBytes; raise resources.limits.memory by that much for
+    # every additional one.
+    concurrency: 1
+    # Larger files are not inspected and never downloaded for it.
+    maxFileBytes: 1073741824
+    # A tool process running longer than this is killed.
+    timeoutSecs: 60
+    # Memory limit (RLIMIT_DATA) of one tool process (preview worker or
+    # exiftool); a file needing more fails with an error instead of
+    # OOM-killing the pod. 320 MiB fits one next to the server within the
+    # default 512Mi. 0 = no limit.
+    memoryBytes: 335544320
+
+  preview:
     # Longest edge of a served preview in pixels; 0 = embedded size.
     maxDim: 2048
-    # Previews extracted at the same time, per pod. Each runs a worker of
-    # up to workerMemoryBytes; raise resources.limits.memory by that much
-    # for every additional one.
-    concurrency: 1
-    # Larger files get no preview and are never downloaded for one.
-    maxFileBytes: 1073741824
-    # A worker running longer than this is killed.
-    timeoutSecs: 60
-    # Memory limit (RLIMIT_DATA) of one worker; a preview needing more
-    # fails with an error instead of OOM-killing the pod. 320 MiB fits one
-    # worker next to the server within the default 512Mi. 0 = no limit.
-    workerMemoryBytes: 335544320
 
   s3:
     bucket: ""

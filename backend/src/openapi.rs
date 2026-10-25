@@ -83,7 +83,7 @@ impl Modify for SecurityAddon {
         admin::approve_pending,
         admin::reject_pending,
         admin::verify_pending,
-        admin::preview_pending,
+        admin::inspect_pending,
         admin::edit_set,
         admin::delete_set_file,
         admin::delete_set,

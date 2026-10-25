@@ -221,63 +221,71 @@ pub struct Config {
     #[arg(long, env = "RAWDB_FEED_PENDING_TITLE", default_value = "RawDB — pending uploads")]
     pub feed_pending_title: String,
 
-    // ---- Reviewer previews ----------------------------------------------------
-    // `GET /api/admin/pending/{upload_id}/preview/{path}` downloads the file
-    // from S3, extracts its embedded preview (or thumbnail) with rawler in a
-    // separate worker process and caches the resulting JPEG on local disk.
-    /// Directory for preview downloads (`work/`) and cached results
-    /// (`cache/`). Defaults to `<RAWDB_CACHE_DIR>/previews`. In-flight
-    /// downloads need up to `RAWDB_PREVIEW_MAX_FILE_BYTES` ×
-    /// `RAWDB_PREVIEW_CONCURRENCY` of free space here.
-    #[arg(long, env = "RAWDB_PREVIEW_DIR")]
-    pub preview_dir: Option<PathBuf>,
+    // ---- Reviewer file inspection ----------------------------------------------
+    // `GET /api/admin/pending/{upload_id}/{preview,exiftool}/{path}` download
+    // the file from S3, run a tool on it (rawler preview extraction in a
+    // worker process, or exiftool) and cache the result on local disk.
+    /// Directory for inspection downloads (`work/`) and cached results
+    /// (`cache/`). Defaults to `<RAWDB_CACHE_DIR>/inspect`. In-flight
+    /// downloads need up to `RAWDB_INSPECT_MAX_FILE_BYTES` ×
+    /// `RAWDB_INSPECT_CONCURRENCY` of free space here.
+    #[arg(long, env = "RAWDB_INSPECT_DIR")]
+    pub inspect_dir: Option<PathBuf>,
 
-    /// How long an extracted preview stays cached, in seconds. Default 3600.
+    /// How long a preview or exiftool listing stays cached, in seconds.
+    /// Default 3600.
     #[arg(
         long,
-        env = "RAWDB_PREVIEW_CACHE_TTL_SECS",
+        env = "RAWDB_INSPECT_CACHE_TTL_SECS",
         default_value_t = 3600,
         value_parser = clap::value_parser!(u64).range(1..)
     )]
-    pub preview_cache_ttl_secs: u64,
+    pub inspect_cache_ttl_secs: u64,
+
+    /// Files inspected at the same time, per instance. Each run is a
+    /// download plus a tool process of up to `RAWDB_INSPECT_MEMORY_BYTES`,
+    /// so raise the container memory limit along with this. Default 1.
+    #[arg(
+        long,
+        env = "RAWDB_INSPECT_CONCURRENCY",
+        default_value_t = 1,
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub inspect_concurrency: u32,
+
+    /// Files larger than this (bytes) are not inspected and never
+    /// downloaded for it. Default 1 GiB.
+    #[arg(long, env = "RAWDB_INSPECT_MAX_FILE_BYTES", default_value_t = 1024 * 1024 * 1024)]
+    pub inspect_max_file_bytes: u64,
+
+    /// Wall-clock limit for one tool run, in seconds; the process is
+    /// killed when it runs longer. Default 60.
+    #[arg(
+        long,
+        env = "RAWDB_INSPECT_TIMEOUT_SECS",
+        default_value_t = 60,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub inspect_timeout_secs: u64,
+
+    /// Memory limit (`RLIMIT_DATA`, bytes) of a tool process (preview
+    /// worker or exiftool). A file needing more fails with an error instead
+    /// of pushing the container into the OOM killer. `0` disables the
+    /// limit. Default 320 MiB, which fits one tool next to the server
+    /// within 512 MiB.
+    #[arg(long, env = "RAWDB_INSPECT_MEMORY_BYTES", default_value_t = 320 * 1024 * 1024)]
+    pub inspect_memory_bytes: u64,
 
     /// Longest edge of a served preview, in pixels; larger embedded
     /// previews are downscaled. `0` keeps the embedded size. Default 2048.
     #[arg(long, env = "RAWDB_PREVIEW_MAX_DIM", default_value_t = 2048)]
     pub preview_max_dim: u32,
 
-    /// Previews extracted at the same time, per instance. Each one runs a
-    /// worker process of up to `RAWDB_PREVIEW_WORKER_MEMORY_BYTES`, so raise
-    /// the container memory limit along with this. Default 1.
-    #[arg(
-        long,
-        env = "RAWDB_PREVIEW_CONCURRENCY",
-        default_value_t = 1,
-        value_parser = clap::value_parser!(u32).range(1..)
-    )]
-    pub preview_concurrency: u32,
-
-    /// Files larger than this (bytes) get no preview and are never
-    /// downloaded for one. Default 1 GiB.
-    #[arg(long, env = "RAWDB_PREVIEW_MAX_FILE_BYTES", default_value_t = 1024 * 1024 * 1024)]
-    pub preview_max_file_bytes: u64,
-
-    /// Wall-clock limit for one preview worker, in seconds; the worker is
-    /// killed when it runs longer. Default 60.
-    #[arg(
-        long,
-        env = "RAWDB_PREVIEW_TIMEOUT_SECS",
-        default_value_t = 60,
-        value_parser = clap::value_parser!(u64).range(1..)
-    )]
-    pub preview_timeout_secs: u64,
-
-    /// Memory limit (`RLIMIT_DATA`, bytes) of a preview worker. A file
-    /// whose preview needs more fails with an error instead of pushing the
-    /// container into the OOM killer. `0` disables the limit. Default
-    /// 320 MiB, which fits one worker next to the server within 512 MiB.
-    #[arg(long, env = "RAWDB_PREVIEW_WORKER_MEMORY_BYTES", default_value_t = 320 * 1024 * 1024)]
-    pub preview_worker_memory_bytes: u64,
+    /// The exiftool executable, looked up in `PATH` unless it is a path.
+    /// When it can't be run, exiftool output is disabled (logged at
+    /// startup). Default `exiftool`.
+    #[arg(long, env = "RAWDB_EXIFTOOL_BIN", default_value = "exiftool")]
+    pub exiftool_bin: PathBuf,
 
     // ---- OpenAPI docs ---------------------------------------------------------
     /// Serve interactive OpenAPI docs at `/docs` and the spec at
@@ -389,11 +397,11 @@ impl Config {
             && self.github_redirect_url.is_some()
     }
 
-    /// `RAWDB_PREVIEW_DIR`, or `previews/` inside the cache dir.
-    pub fn preview_dir(&self) -> PathBuf {
-        self.preview_dir
+    /// `RAWDB_INSPECT_DIR`, or `inspect/` inside the cache dir.
+    pub fn inspect_dir(&self) -> PathBuf {
+        self.inspect_dir
             .clone()
-            .unwrap_or_else(|| self.cache_dir.join("previews"))
+            .unwrap_or_else(|| self.cache_dir.join("inspect"))
     }
 
     pub fn oidc_enabled(&self) -> bool {

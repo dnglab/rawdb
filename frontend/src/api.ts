@@ -262,9 +262,16 @@ export interface SetEdit {
 
 const enc = encodeURIComponent;
 
-function pendingPreviewUrl(uploadId: string, path: string): string {
+// URL of one inspection output (e.g. `preview`/`image`) of a file in a
+// pending upload.
+function pendingInspectUrl(
+  uploadId: string,
+  processor: string,
+  output: string,
+  path: string,
+): string {
   const parts = path.split('/').map(enc).join('/');
-  return `/api/admin/pending/${enc(uploadId)}/preview/${parts}`;
+  return `/api/admin/pending/${enc(uploadId)}/inspect/${enc(processor)}/${enc(output)}/${parts}`;
 }
 
 export const api = {
@@ -340,14 +347,22 @@ export const api = {
     return `/api/admin/pending/${enc(uploadId)}/download/${parts}`;
   },
   adminPendingPreviewUrl: (uploadId: string, path: string): string =>
-    pendingPreviewUrl(uploadId, path),
+    pendingInspectUrl(uploadId, 'preview', 'image', path),
   /// JPEG of the file's embedded preview. Rejects with the server's reason
   /// (e.g. not a RAW format, no embedded preview) when there is none.
   adminPendingPreview: async (uploadId: string, path: string): Promise<Blob> => {
-    const url = pendingPreviewUrl(uploadId, path);
+    const url = pendingInspectUrl(uploadId, 'preview', 'image', path);
     const res = await fetch(url, { credentials: 'same-origin' });
     if (!res.ok) throw await errorFromResponse(url, res);
     return res.blob();
+  },
+  /// `exiftool -a -u -G1 -s` listing of the file. Rejects with the
+  /// server's reason when there is none.
+  adminPendingExiftool: async (uploadId: string, path: string): Promise<string> => {
+    const url = pendingInspectUrl(uploadId, 'exiftool', 'listing', path);
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw await errorFromResponse(url, res);
+    return res.text();
   },
   adminSetEdit: (maker: string, model: string, edit: SetEdit) =>
     putJSONNoBody(

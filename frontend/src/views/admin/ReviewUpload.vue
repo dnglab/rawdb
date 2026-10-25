@@ -15,16 +15,21 @@ const confirm = useConfirm();
 // `reviewer` edits the upload; `approver` decides on it (approve/reject).
 const { canEditPending, canApprove } = useAuth();
 
-interface PreviewState {
+/// One per-file inspection panel ("Preview image", "exiftool output").
+interface PanelState {
   status: 'loading' | 'ok' | 'error';
-  /// Object URL of the fetched JPEG ('ok').
+  /// Object URL of the fetched preview JPEG ('ok').
   src?: string;
-  /// Why there is no preview ('error').
+  /// The fetched exiftool listing ('ok').
+  text?: string;
+  /// Why there is no result ('error').
   message?: string;
-  /// The "Preview image" panel was collapsed. Unset on every new state,
-  /// so a freshly loaded preview starts expanded.
+  /// The panel was collapsed. Unset on every new state, so a freshly
+  /// loaded result starts expanded.
   collapsed?: boolean;
 }
+
+type PanelField = 'preview' | 'exif';
 
 interface EditFileRow {
   old_path: string;
@@ -40,7 +45,9 @@ interface EditFileRow {
   /// Latest verify result for this row: 'ok' / 'mismatch' / 'missing' / null.
   verify: 'ok' | 'mismatch' | 'missing' | null;
   /// Embedded preview, once "Load previews" was clicked.
-  preview: PreviewState | null;
+  preview: PanelState | null;
+  /// exiftool listing, once "Load exiftool" was clicked.
+  exif: PanelState | null;
 }
 
 const setForm = reactive({
@@ -68,11 +75,14 @@ const verifyResult = ref<{
   missing: number;
 } | null>(null);
 const conflict = ref<'refuse' | 'merge' | 'replace'>('refuse');
-// Set once "Load previews" was clicked; a reload (e.g. after save) then
-// also fetches previews of renamed files.
-const previewsRequested = ref(false);
+// Set once the matching "Load …" button was clicked; a reload (e.g. after
+// save) then also fetches the panels of renamed files.
+const panelsRequested = reactive({ preview: false, exif: false });
 const loadingPreviews = computed(() =>
   files.value.some((f) => f.preview?.status === 'loading'),
+);
+const loadingExif = computed(() =>
+  files.value.some((f) => f.exif?.status === 'loading'),
 );
 
 const conflictOptions = [
@@ -112,11 +122,12 @@ async function load() {
     setForm.uploaded_at = d.uploaded_at;
     setForm.notes = d.notes ?? '';
     setForm.special = d.special;
-    // Keep loaded previews across a reload (e.g. after save) for files
-    // whose stored path didn't change.
-    const previews = new Map(files.value.map((r) => [r.old_path, r.preview]));
+    // Keep loaded panels across a reload (e.g. after save) for files whose
+    // stored path didn't change.
+    const before = new Map(files.value.map((r) => [r.old_path, r]));
     files.value = d.files.map((f) => {
       const { prefix, filename } = splitPath(f.path);
+      const prev = before.get(f.path);
       return {
         old_path: f.path,
         prefix,
@@ -128,15 +139,17 @@ async function load() {
         selected: true,
         sha256: f.sha256 ?? null,
         verify: null,
-        preview: previews.get(f.path) ?? null,
+        preview: prev?.preview ?? null,
+        exif: prev?.exif ?? null,
       };
     });
     const kept = new Set(d.files.map((f) => f.path));
-    for (const [path, p] of previews) {
-      if (!kept.has(path)) revokePreview(p);
+    for (const [path, r] of before) {
+      if (!kept.has(path)) revokeObjectUrl(r.preview);
     }
     loaded.value = true;
-    if (previewsRequested.value) void loadPreviews();
+    if (panelsRequested.preview) void loadPreviews();
+    if (panelsRequested.exif) void loadExiftool();
   } catch (e) {
     err.value = String(e);
   } finally {
@@ -152,36 +165,39 @@ function previewHref(r: EditFileRow): string {
   return api.adminPendingPreviewUrl(props.upload_id, r.old_path);
 }
 
-function revokePreview(p: PreviewState | null | undefined) {
+// Frees the object URL of a preview panel, if any.
+function revokeObjectUrl(p: PanelState | null | undefined) {
   if (p?.src) URL.revokeObjectURL(p.src);
 }
 
-// The whole "Preview image" header toggles, not just PrimeVue's small button.
-function onPreviewHeaderClick(e: MouseEvent, r: EditFileRow) {
-  if ((e.target as HTMLElement).closest('button') || !r.preview) return;
-  r.preview.collapsed = !r.preview.collapsed;
+// The whole panel header toggles, not just PrimeVue's small button.
+function onPanelHeaderClick(e: MouseEvent, p: PanelState | null) {
+  if ((e.target as HTMLElement).closest('button') || !p) return;
+  p.collapsed = !p.collapsed;
 }
 
-// Parallel preview requests. The server extracts only a few at a time
-// anyway; a small pool keeps the browser's per-host connections free for
-// Save/Approve and fills the rows top to bottom.
-const PREVIEW_PARALLEL = 2;
+// Parallel requests per panel kind. The server inspects only a few files
+// at a time anyway; a small pool keeps the browser's per-host connections
+// free for Save/Approve and fills the rows top to bottom.
+const PANEL_PARALLEL = 2;
 
-async function loadPreviews() {
-  previewsRequested.value = true;
-  // Fetch missing and failed previews; rows still loading are already on
-  // their way.
+// Fills the `field` panel of every row that has none yet or failed; rows
+// still loading are already on their way.
+async function loadPanels(
+  field: PanelField,
+  fetchOne: (path: string) => Promise<PanelState>,
+) {
+  panelsRequested[field] = true;
   const rows = files.value.filter(
-    (r) => !r.preview || r.preview.status === 'error',
+    (r) => !r[field] || r[field]?.status === 'error',
   );
-  for (const r of rows) r.preview = { status: 'loading' };
+  for (const r of rows) r[field] = { status: 'loading' };
   const queue = rows.map((r) => r.old_path);
   const next = async () => {
     for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
-      let result: PreviewState;
+      let result: PanelState;
       try {
-        const blob = await api.adminPendingPreview(props.upload_id, path);
-        result = { status: 'ok', src: URL.createObjectURL(blob) };
+        result = await fetchOne(path);
       } catch (e) {
         result = {
           status: 'error',
@@ -190,11 +206,27 @@ async function loadPreviews() {
       }
       // Look the row up again: a save may have reloaded or renamed it.
       const r = files.value.find((f) => f.old_path === path);
-      if (r) r.preview = result;
-      else revokePreview(result);
+      if (r) r[field] = result;
+      else revokeObjectUrl(result);
     }
   };
-  await Promise.all(Array.from({ length: PREVIEW_PARALLEL }, next));
+  await Promise.all(Array.from({ length: PANEL_PARALLEL }, next));
+}
+
+function loadPreviews() {
+  return loadPanels('preview', async (path) => ({
+    status: 'ok',
+    src: URL.createObjectURL(
+      await api.adminPendingPreview(props.upload_id, path),
+    ),
+  }));
+}
+
+function loadExiftool() {
+  return loadPanels('exif', async (path) => ({
+    status: 'ok',
+    text: await api.adminPendingExiftool(props.upload_id, path),
+  }));
 }
 
 function buildEdit(): PendingEdit {
@@ -251,7 +283,7 @@ function removeRow(index: number) {
     rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
     acceptProps: { label: 'Remove', severity: 'danger' },
     accept: () => {
-      revokePreview(files.value[index]?.preview);
+      revokeObjectUrl(files.value[index]?.preview);
       files.value.splice(index, 1);
     },
   });
@@ -406,7 +438,7 @@ async function downloadAll() {
 }
 
 onMounted(load);
-onBeforeUnmount(() => files.value.forEach((r) => revokePreview(r.preview)));
+onBeforeUnmount(() => files.value.forEach((r) => revokeObjectUrl(r.preview)));
 </script>
 
 <template>
@@ -513,6 +545,16 @@ onBeforeUnmount(() => files.value.forEach((r) => revokePreview(r.preview)));
               :loading="loadingPreviews"
               :disabled="files.length === 0"
               @click="loadPreviews"
+            />
+            <Button
+              label="Load exiftool"
+              icon="pi pi-list"
+              size="small"
+              severity="secondary"
+              outlined
+              :loading="loadingExif"
+              :disabled="files.length === 0"
+              @click="loadExiftool"
             />
           </div>
         </template>
@@ -638,10 +680,10 @@ onBeforeUnmount(() => files.value.forEach((r) => revokePreview(r.preview)));
               v-model:collapsed="r.preview.collapsed"
               header="Preview image"
               toggleable
-              class="preview"
+              class="inspect"
               :pt="{
                 header: {
-                  onClick: (e: MouseEvent) => onPreviewHeaderClick(e, r),
+                  onClick: (e: MouseEvent) => onPanelHeaderClick(e, r.preview),
                 },
               }"
             >
@@ -667,6 +709,36 @@ onBeforeUnmount(() => files.value.forEach((r) => revokePreview(r.preview)));
                 icon="pi pi-eye-slash"
               >
                 No preview: {{ r.preview.message }}
+              </Message>
+            </Panel>
+            <Panel
+              v-if="r.exif"
+              v-model:collapsed="r.exif.collapsed"
+              header="exiftool output"
+              toggleable
+              class="inspect"
+              :pt="{
+                header: {
+                  onClick: (e: MouseEvent) => onPanelHeaderClick(e, r.exif),
+                },
+              }"
+            >
+              <Skeleton
+                v-if="r.exif.status === 'loading'"
+                width="100%"
+                height="6rem"
+              />
+              <pre v-else-if="r.exif.status === 'ok'" class="exif">{{
+                r.exif.text
+              }}</pre>
+              <Message
+                v-else
+                severity="warn"
+                size="small"
+                variant="simple"
+                icon="pi pi-eye-slash"
+              >
+                No exiftool output: {{ r.exif.message }}
               </Message>
             </Panel>
             <Divider v-if="i < files.length - 1" />
@@ -826,19 +898,28 @@ onBeforeUnmount(() => files.value.forEach((r) => revokePreview(r.preview)));
   margin-right: 0.4rem;
   opacity: 0.7;
 }
-.preview {
+.inspect {
   margin-top: 0.5rem;
 }
-.preview :deep(.p-panel-header) {
+.inspect :deep(.p-panel-header) {
   cursor: pointer;
   user-select: none;
 }
-.preview img {
+.inspect img {
   display: block;
   width: 100%;
   height: auto;
   border-radius: var(--p-border-radius-md);
   cursor: zoom-in;
+}
+/* Every line shows: no height cap, long values wrap. */
+.exif {
+  margin: 0;
+  font-family: monospace;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .mb {
   margin-bottom: 0.75rem;

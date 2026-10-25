@@ -1,22 +1,38 @@
-//! Preview worker: the rawdb binary re-executed with [`ARG`] as its first
-//! argument. Extracts the embedded preview (or thumbnail) of one RAW file
-//! with rawler and writes it as a JPEG.
+//! `preview/image`: the embedded preview (or thumbnail) of a RAW file as
+//! JPEG.
 //!
+//! [`PreviewProcessor`] runs a worker: the rawdb binary re-executed with
+//! [`ARG`] as its first argument, which extracts the preview with rawler.
 //! Uploads are anonymous, so rawler parses untrusted input here — often
 //! from cameras it doesn't support yet. Running it in its own process
 //! under a memory limit keeps a panic, abort, runaway allocation or hang
-//! from taking the server down; the server side ([`super::Previews`])
-//! kills the worker when it runs into the timeout.
+//! from taking the server down; the processor kills the worker when it
+//! runs into the timeout.
 //!
-//! Usage: `rawdb __preview-worker <input> <output> <max-dim> <memory-bytes>`
+//! Worker usage: `rawdb __preview-worker <input> <output> <max-dim> <memory-bytes>`
 
 use std::ffi::{OsStr, OsString};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
+use anyhow::Context;
+use async_trait::async_trait;
 use image::codecs::jpeg::JpegEncoder;
 use image::metadata::Orientation;
 use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
+
+use super::{extension, stderr_text, Limits, Outcome, OutputFile, Processor};
+
+/// Processor name.
+pub const NAME: &str = "preview";
+/// Its only output: the preview JPEG.
+const OUTPUT: &str = "image";
+const OUTPUT_FILE: &str = "image.jpg";
+
+/// Bump when the rendering changes (sizing, quality, orientation), so
+/// previews cached by an older build aren't served.
+const RENDER_VERSION: u32 = 1;
 
 /// First command-line argument that selects worker mode.
 pub const ARG: &str = "__preview-worker";
@@ -41,6 +57,95 @@ pub fn run_if_requested() -> Option<i32> {
     Some(run(&args.collect::<Vec<_>>()))
 }
 
+/// Renders previews by running the worker on a downloaded file.
+pub(super) struct PreviewProcessor {
+    /// This binary; workers are started by re-executing it.
+    exe: PathBuf,
+    /// Longest edge of a served preview; `0` keeps the embedded size.
+    max_dim: u32,
+}
+
+impl PreviewProcessor {
+    pub(super) fn new(exe: PathBuf, max_dim: u32) -> Self {
+        Self { exe, max_dim }
+    }
+}
+
+#[async_trait]
+impl Processor for PreviewProcessor {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
+    fn outputs(&self) -> &'static [&'static str] {
+        &[OUTPUT]
+    }
+
+    fn check(&self, file_name: &str) -> Result<(), String> {
+        if raw_extension(file_name).is_some() {
+            return Ok(());
+        }
+        Err(match extension(file_name) {
+            Some(ext) => format!(".{ext} is not a RAW format rawler reads"),
+            None => "file has no extension; not a RAW format rawler reads".into(),
+        })
+    }
+
+    fn params(&self) -> String {
+        format!("{}\0{RENDER_VERSION}", self.max_dim)
+    }
+
+    async fn run(&self, input: &Path, out: &Path, limits: &Limits) -> anyhow::Result<Outcome> {
+        let child = tokio::process::Command::new(&self.exe)
+            .arg(ARG)
+            .arg(input)
+            .arg(out.join(OUTPUT_FILE))
+            .arg(self.max_dim.to_string())
+            .arg(limits.memory.to_string())
+            // The worker parses untrusted files and gets none of the
+            // server's secrets. A rayon thread per host CPU would also eat
+            // into its memory limit (thread stacks count against it).
+            .env_clear()
+            .env("RAYON_NUM_THREADS", "2")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .context("spawn preview worker")?;
+        // On timeout the wait future, and with it the child, is dropped,
+        // which kills the worker.
+        let Ok(done) = tokio::time::timeout(limits.timeout, child.wait_with_output()).await else {
+            return Ok(Outcome::Failed(format!(
+                "decoder timed out after {}s",
+                limits.timeout.as_secs()
+            )));
+        };
+        let done = done.context("wait for preview worker")?;
+        let stderr = stderr_text(&done.stderr);
+        Ok(match done.status.code() {
+            Some(0) => Outcome::Done(vec![OutputFile::new(OUTPUT, OUTPUT_FILE, "image/jpeg")]),
+            Some(EXIT_NO_PREVIEW) => Outcome::NoResult(stderr),
+            _ if stderr.contains("memory allocation of") => Outcome::Failed(format!(
+                "preview needs more memory than the worker may use \
+                 (RAWDB_INSPECT_MEMORY_BYTES={})",
+                limits.memory
+            )),
+            _ => Outcome::Failed(format!("decoder crashed ({}): {stderr}", done.status)),
+        })
+    }
+}
+
+/// The extension of `name` as listed by rawler (upper case), if rawler
+/// reads that format.
+fn raw_extension(name: &str) -> Option<&'static str> {
+    let ext = extension(name)?;
+    rawler::decoders::supported_extensions()
+        .iter()
+        .copied()
+        .find(|known| known.eq_ignore_ascii_case(ext))
+}
+
 fn run(args: &[OsString]) -> i32 {
     let [input, output, max_dim, memory] = args else {
         eprintln!("usage: rawdb {ARG} <input> <output> <max-dim> <memory-bytes>");
@@ -50,7 +155,7 @@ fn run(args: &[OsString]) -> i32 {
         eprintln!("invalid <max-dim> or <memory-bytes>");
         return EXIT_USAGE;
     };
-    if let Err(e) = limit_memory(memory) {
+    if let Err(e) = super::limit_memory(memory) {
         eprintln!("setrlimit(RLIMIT_DATA): {e}");
         return EXIT_USAGE;
     }
@@ -70,33 +175,6 @@ fn run(args: &[OsString]) -> i32 {
 
 fn parse<T: std::str::FromStr>(arg: &OsStr) -> Option<T> {
     arg.to_str()?.parse().ok()
-}
-
-/// Caps the data segment (heap and anonymous mappings), so an oversized
-/// allocation fails inside the worker instead of pushing the container
-/// into the OOM killer. The read-only mapping of the input file doesn't
-/// count against it. `0` leaves the limit alone.
-#[cfg(unix)]
-fn limit_memory(bytes: u64) -> std::io::Result<()> {
-    if bytes == 0 {
-        return Ok(());
-    }
-    let limit = libc::rlimit {
-        rlim_cur: bytes as libc::rlim_t,
-        rlim_max: bytes as libc::rlim_t,
-    };
-    // SAFETY: setrlimit only reads the struct passed by reference, and
-    // lowering a limit needs no privileges.
-    if unsafe { libc::setrlimit(libc::RLIMIT_DATA, &limit) } == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(not(unix))]
-fn limit_memory(_bytes: u64) -> std::io::Result<()> {
-    Ok(())
 }
 
 /// The embedded preview of the RAW file at `path` (else its thumbnail) as
@@ -151,6 +229,24 @@ pub fn render(path: &Path, max_dim: u32) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_extension_is_case_insensitive() {
+        assert_eq!(raw_extension("DSC_0001.nef"), Some("NEF"));
+        assert_eq!(raw_extension("IMG_0001.CR3"), Some("CR3"));
+        assert_eq!(raw_extension("clip.mp4"), None);
+        assert_eq!(raw_extension("photo.heif"), None);
+        assert_eq!(raw_extension("noext"), None);
+        assert_eq!(raw_extension("trailingdot."), None);
+    }
+
+    #[test]
+    fn check_and_params() {
+        let p = PreviewProcessor::new(PathBuf::new(), 2048);
+        assert!(p.check("a.NEF").is_ok());
+        assert_eq!(p.check("clip.mp4").unwrap_err(), ".mp4 is not a RAW format rawler reads");
+        assert_ne!(p.params(), PreviewProcessor::new(PathBuf::new(), 1024).params());
+    }
 
     #[test]
     fn rejects_non_raw_content() {

@@ -22,15 +22,16 @@ data:
   # allowed — RAW formats are too numerous to allowlist). Matches the
   # binary's default.
   RAWDB_BLOCKED_EXTENSIONS: "zip,tar,gz,tgz,txt,exe,pdf,rar,7z,bz2,xz"
-  # Reviewer previews (binary defaults). Downloads and cached JPEGs go to
-  # RAWDB_PREVIEW_DIR, default <RAWDB_CACHE_DIR>/previews. Each concurrent
-  # preview runs a worker of up to RAWDB_PREVIEW_WORKER_MEMORY_BYTES.
-  RAWDB_PREVIEW_CACHE_TTL_SECS: "3600"
+  # Reviewer file inspection: previews and exiftool output (binary
+  # defaults). Downloads and cached results go to RAWDB_INSPECT_DIR, default
+  # <RAWDB_CACHE_DIR>/inspect. Each concurrent run starts a tool process of
+  # up to RAWDB_INSPECT_MEMORY_BYTES.
+  RAWDB_INSPECT_CACHE_TTL_SECS: "3600"
+  RAWDB_INSPECT_CONCURRENCY: "1"
+  RAWDB_INSPECT_MAX_FILE_BYTES: "1073741824"
+  RAWDB_INSPECT_TIMEOUT_SECS: "60"
+  RAWDB_INSPECT_MEMORY_BYTES: "335544320"
   RAWDB_PREVIEW_MAX_DIM: "2048"
-  RAWDB_PREVIEW_CONCURRENCY: "1"
-  RAWDB_PREVIEW_MAX_FILE_BYTES: "1073741824"
-  RAWDB_PREVIEW_TIMEOUT_SECS: "60"
-  RAWDB_PREVIEW_WORKER_MEMORY_BYTES: "335544320"
   # When set, the first OIDC login from this sub becomes admin automatically.
   # Comment out once the user has been created via the UI.
   # RAWDB_OIDC_INITIAL_ADMIN_SUB: "github:cytrinox"

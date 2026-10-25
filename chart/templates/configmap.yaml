@@ -28,17 +28,17 @@ data:
   RAWDB_FEED_LIMIT: {{ .Values.config.feedLimit | quote }}
   RAWDB_FEED_PUBLISHED_TITLE: {{ .Values.config.feedPublishedTitle | quote }}
   RAWDB_FEED_PENDING_TITLE: {{ .Values.config.feedPendingTitle | quote }}
-  {{- with .Values.config.preview }}
+  {{- with .Values.config.inspect }}
   {{- with .dir }}
-  RAWDB_PREVIEW_DIR: {{ . | quote }}
+  RAWDB_INSPECT_DIR: {{ . | quote }}
   {{- end }}
-  RAWDB_PREVIEW_CACHE_TTL_SECS: {{ printf "%d" (.cacheTtlSecs | int64) | quote }}
-  RAWDB_PREVIEW_MAX_DIM: {{ .maxDim | quote }}
-  RAWDB_PREVIEW_CONCURRENCY: {{ .concurrency | quote }}
-  RAWDB_PREVIEW_MAX_FILE_BYTES: {{ printf "%d" (.maxFileBytes | int64) | quote }}
-  RAWDB_PREVIEW_TIMEOUT_SECS: {{ .timeoutSecs | quote }}
-  RAWDB_PREVIEW_WORKER_MEMORY_BYTES: {{ printf "%d" (.workerMemoryBytes | int64) | quote }}
+  RAWDB_INSPECT_CACHE_TTL_SECS: {{ printf "%d" (.cacheTtlSecs | int64) | quote }}
+  RAWDB_INSPECT_CONCURRENCY: {{ .concurrency | quote }}
+  RAWDB_INSPECT_MAX_FILE_BYTES: {{ printf "%d" (.maxFileBytes | int64) | quote }}
+  RAWDB_INSPECT_TIMEOUT_SECS: {{ .timeoutSecs | quote }}
+  RAWDB_INSPECT_MEMORY_BYTES: {{ printf "%d" (.memoryBytes | int64) | quote }}
   {{- end }}
+  RAWDB_PREVIEW_MAX_DIM: {{ .Values.config.preview.maxDim | quote }}
   {{- with .Values.config.publicUrl }}
   RAWDB_PUBLIC_URL: {{ . | quote }}
   {{- end }}

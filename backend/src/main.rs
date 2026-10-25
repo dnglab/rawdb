@@ -14,9 +14,9 @@ mod cache;
 mod config;
 mod error;
 mod events;
+mod inspect;
 mod meta;
 mod openapi;
-mod preview;
 mod ratelimit;
 mod routes;
 mod s3;
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
     // A preview worker is this binary re-executed with a hidden first
     // argument. It exits before any server setup: no runtime, logging,
     // TLS provider or config (it runs with an empty environment).
-    if let Some(code) = preview::worker::run_if_requested() {
+    if let Some(code) = inspect::preview::run_if_requested() {
         std::process::exit(code);
     }
     serve()
@@ -83,12 +83,16 @@ async fn serve() -> Result<()> {
     let db = Db::open(&config.cache_dir)?;
     let s3 = S3::from_config(&config).await?;
     let metrics = Arc::new(AppMetrics::new());
-    let previews = Arc::new(preview::Previews::new(
-        &config,
-        metrics.preview_lookups.clone(),
-        metrics.preview_duration_s.clone(),
-    )?);
-    previews.clone().spawn_sweeper();
+    let inspect = Arc::new(
+        inspect::Inspector::new(
+            &config,
+            Arc::new(s3.clone()),
+            metrics.inspect_lookups.clone(),
+            metrics.inspect_duration_s.clone(),
+        )
+        .await?,
+    );
+    inspect.clone().spawn_sweeper();
     // Initialize the k8s Event recorder before the scanner so the
     // scanner can emit ScanError events; outside a cluster this no-ops.
     let events = events::RawdbEvents::init().await;
@@ -150,7 +154,7 @@ async fn serve() -> Result<()> {
         downloads,
         events,
         sync_ticks,
-        previews,
+        inspect,
     };
 
     let app = routes::build_router(state.clone());

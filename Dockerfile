@@ -1,5 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
+# ExifTool for the reviewer "exiftool output" panel. Latest release:
+# https://exiftool.org/ver.txt; its SHA2-256 is listed in
+# https://exiftool.org/checksums-<version>.txt. Bump both together.
+ARG EXIFTOOL_VERSION=13.59
+ARG EXIFTOOL_SHA256=668ea3acececb7235fbd0f4900e72d5f12c9b07e5c778fd36cb1e9b5828fd65a
+
 # --- Stage 1: frontend ----------------------------------------------------------
 FROM node:26.1-slim AS frontend
 WORKDIR /fe
@@ -36,8 +42,28 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
 COPY backend/src ./src
 RUN touch src/main.rs && cargo build --release
 
-# --- Stage 3: runtime -----------------------------------------------------------
+# --- Stage 3: exiftool ----------------------------------------------------------
+# The official release, checksum-verified; only the script and its lib/
+# are kept.
+FROM alpine:3.23 AS exiftool
+ARG EXIFTOOL_VERSION
+ARG EXIFTOOL_SHA256
+RUN wget -qO /tmp/exiftool.tar.gz \
+        "https://downloads.sourceforge.net/project/exiftool/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz" \
+    && echo "${EXIFTOOL_SHA256}  /tmp/exiftool.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/exiftool.tar.gz -C /tmp \
+    && mkdir /opt/exiftool \
+    && mv "/tmp/Image-ExifTool-${EXIFTOOL_VERSION}/exiftool" \
+          "/tmp/Image-ExifTool-${EXIFTOOL_VERSION}/lib" /opt/exiftool/
+
+# --- Stage 4: runtime -----------------------------------------------------------
 FROM alpine:3.23
+
+# ExifTool runs on Perl. The symlink puts it on PATH; the script finds its
+# lib/ through the link. `-ver` fails the build if a Perl module is missing.
+RUN apk add --no-cache perl
+COPY --from=exiftool /opt/exiftool /opt/exiftool
+RUN ln -s /opt/exiftool/exiftool /usr/local/bin/exiftool && exiftool -ver
 
 WORKDIR /app
 COPY --from=backend /be/target/release/rawdb /app/rawdb
