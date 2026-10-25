@@ -828,7 +828,6 @@ mod tests {
                 size: self.body.len() as u64,
                 etag: Some("etag1".into()),
                 last_modified: None,
-                content_type: None,
             }))
         }
 

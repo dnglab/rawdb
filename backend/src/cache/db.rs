@@ -80,7 +80,6 @@ pub struct SetRow {
     pub notes: Option<String>,
     pub uploaded_at: Option<DateTime<Utc>>,
     pub uploaded_by: Option<String>,
-    pub meta_etag: Option<String>,
     pub special: bool,
     pub approved_at: Option<DateTime<Utc>>,
     pub approved_by: Option<String>,
@@ -96,7 +95,6 @@ pub struct FileRow {
     pub size: u64,
     pub license: Option<String>,
     pub notes: Option<String>,
-    pub etag: Option<String>,
     /// Lowercase hex SHA-256 of the file content, sourced from the
     /// uploader's `rawdb-meta.toml` entry. `None` for legacy sets that
     /// never carried a checksum.
@@ -111,8 +109,6 @@ pub struct PendingSetRow {
     pub license: String,
     pub notes: Option<String>,
     pub uploaded_at: Option<DateTime<Utc>>,
-    pub uploaded_by: Option<String>,
-    pub meta_etag: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -403,7 +399,7 @@ impl Db {
     pub fn list_files(&self, maker: &str, model: &str) -> Result<Vec<FileRow>> {
         let conn = self.reader.get()?;
         let mut stmt = conn.prepare(
-            "SELECT path, category, extension, size, license, notes, etag, sha256
+            "SELECT path, category, extension, size, license, notes, sha256
              FROM files WHERE maker = ? AND model = ? ORDER BY category, path",
         )?;
         let rows = stmt
@@ -415,8 +411,7 @@ impl Db {
                     size: r.get::<_, i64>(3)?.max(0) as u64,
                     license: r.get(4)?,
                     notes: r.get(5)?,
-                    etag: r.get(6)?,
-                    sha256: r.get(7)?,
+                    sha256: r.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -510,7 +505,7 @@ impl Db {
         };
 
         let limit = q.limit.unwrap_or(50).clamp(1, 500) as i64;
-        let offset = q.offset.unwrap_or(0).max(0) as i64;
+        let offset = q.offset.unwrap_or(0) as i64;
 
         // Tie-break on (maker, model) so a page boundary is deterministic
         // even when the requested sort key has duplicates.
@@ -826,7 +821,7 @@ impl Db {
     pub fn recent_pending(&self, limit: u32) -> Result<Vec<PendingSetRow>> {
         let conn = self.reader.get()?;
         let mut stmt = conn.prepare(
-            "SELECT maker, model, upload_id, license, notes, uploaded_at, uploaded_by, meta_etag
+            "SELECT maker, model, upload_id, license, notes, uploaded_at
              FROM pending_sets
              ORDER BY uploaded_at DESC NULLS LAST, upload_id
              LIMIT ?",
@@ -840,8 +835,6 @@ impl Db {
                     license: r.get(3)?,
                     notes: r.get(4)?,
                     uploaded_at: parse_ts(r.get(5)?),
-                    uploaded_by: r.get(6)?,
-                    meta_etag: r.get(7)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -852,7 +845,7 @@ impl Db {
     pub fn list_pending_files(&self, upload_id: &str) -> Result<Vec<FileRow>> {
         let conn = self.reader.get()?;
         let mut stmt = conn.prepare(
-            "SELECT path, category, extension, size, license, notes, etag, sha256
+            "SELECT path, category, extension, size, license, notes, sha256
              FROM pending_files WHERE upload_id = ? ORDER BY category, path",
         )?;
         let rows = stmt
@@ -864,8 +857,7 @@ impl Db {
                     size: r.get::<_, i64>(3)?.max(0) as u64,
                     license: r.get(4)?,
                     notes: r.get(5)?,
-                    etag: r.get(6)?,
-                    sha256: r.get(7)?,
+                    sha256: r.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1114,7 +1106,7 @@ impl Db {
 }
 
 /// Column list matching [`row_to_set`].
-const SET_COLUMNS: &str = "maker, model, license, notes, uploaded_at, uploaded_by, meta_etag, special,
+const SET_COLUMNS: &str = "maker, model, license, notes, uploaded_at, uploaded_by, special,
      approved_at, approved_by, approved_initial_at, approved_initial_by";
 
 fn row_to_set(r: &rusqlite::Row) -> rusqlite::Result<SetRow> {
@@ -1125,12 +1117,11 @@ fn row_to_set(r: &rusqlite::Row) -> rusqlite::Result<SetRow> {
         notes: r.get(3)?,
         uploaded_at: parse_ts(r.get(4)?),
         uploaded_by: r.get(5)?,
-        meta_etag: r.get(6)?,
-        special: r.get::<_, i64>(7)? != 0,
-        approved_at: parse_ts(r.get(8)?),
-        approved_by: r.get(9)?,
-        approved_initial_at: parse_ts(r.get(10)?),
-        approved_initial_by: r.get(11)?,
+        special: r.get::<_, i64>(6)? != 0,
+        approved_at: parse_ts(r.get(7)?),
+        approved_by: r.get(8)?,
+        approved_initial_at: parse_ts(r.get(9)?),
+        approved_initial_by: r.get(10)?,
     })
 }
 
@@ -1655,7 +1646,10 @@ mod tests {
 
         let row = db.get_set("Canon", "EOS R5").unwrap().expect("set present");
         assert_eq!(row.license, "CC0 1.0");
-        assert_eq!(row.meta_etag.as_deref(), Some("etag-1"));
+        assert_eq!(
+            db.get_set_meta_etag("Canon", "EOS R5").unwrap().as_deref(),
+            Some("etag-1")
+        );
 
         let frows = db.list_files("Canon", "EOS R5").unwrap();
         assert_eq!(frows.len(), 1);

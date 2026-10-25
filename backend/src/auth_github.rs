@@ -46,8 +46,10 @@ pub struct VerifiedIdentity {
     /// GitHub login (the `@handle`); used as `preferred_username`.
     pub login: String,
     /// Stringified numeric GitHub user id.
+    #[allow(dead_code)] // kept from the IdP for later use; not read yet
     pub id: String,
     pub name: Option<String>,
+    #[allow(dead_code)] // kept from the IdP for later use; not read yet
     pub email: Option<String>,
 }
 

@@ -40,6 +40,9 @@ pub struct RawdbEvents {
     inner: Arc<Inner>,
 }
 
+// A single instance lives behind an `Arc`, so the large `Enabled` variant
+// costs nothing; boxing the recorder would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 enum Inner {
     /// Either we're not in a cluster, or initialization failed. All
     /// public methods are cheap no-ops.

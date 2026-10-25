@@ -7,9 +7,6 @@ use prometheus::{Encoder, TextEncoder};
 
 use crate::state::AppState;
 
-const METRICS_STATUS_OK: &str = "ok";
-const METRICS_STATUS_ERROR: &str = "error";
-
 /// Prometheus exposition (text format `0.0.4`). Scraped by the operator's
 /// Prometheus / a `ServiceMonitor`. Served on the dedicated metrics
 /// listener (`RAWDB_METRICS_BIND`).

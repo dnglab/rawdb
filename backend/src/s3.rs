@@ -47,7 +47,6 @@ pub struct HeadInfo {
     pub size: u64,
     pub etag: Option<String>,
     pub last_modified: Option<DateTime<Utc>>,
-    pub content_type: Option<String>,
 }
 
 /// A streaming GET response. `body` is the SDK's `ByteStream` (a
@@ -101,10 +100,6 @@ impl S3 {
             presign_ttl: Duration::from_secs(cfg.presign_ttl_secs),
             conditional_writes: cfg.s3_conditional_writes,
         })
-    }
-
-    pub fn bucket(&self) -> &str {
-        &self.bucket
     }
 
     /// Whether `If-Match` conditional PUTs are usable on this backend.
@@ -183,7 +178,6 @@ impl S3 {
                 last_modified: out
                     .last_modified()
                     .and_then(|t| DateTime::<Utc>::from_timestamp(t.secs(), t.subsec_nanos())),
-                content_type: out.content_type().map(String::from),
             })),
             Err(e) => {
                 if is_not_found(&e) {

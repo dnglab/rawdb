@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use opentelemetry::metrics::{Counter, Gauge, Histogram};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
@@ -59,7 +58,6 @@ pub struct AppMetrics {
   /// `/metrics` handler. Held here (not just the global default registry)
   /// so the binary controls its lifecycle and can be torn down/replaced.
   pub registry: Registry,
-  pub start_time: Instant,
   pub http_requests: Counter<u64>,
   pub http_requests_duration_s: Histogram<f64>,
   pub http_samples: Counter<u64>,
@@ -96,7 +94,6 @@ impl AppMetrics {
 
     Self {
       registry,
-      start_time: Instant::now(),
       http_requests: meter.u64_counter("rawdb.core.http.requests").with_description("Count of requests").build(),
       http_requests_duration_s: meter
         .f64_histogram("rawdb.core.http.requests.duration")

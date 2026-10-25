@@ -428,7 +428,6 @@ mod tests {
             size,
             license: None,
             notes: notes.map(Into::into),
-            etag: None,
             sha256: None,
         }
     }
@@ -445,7 +444,6 @@ mod tests {
             notes: Some("Base ISO <b>only</b>".into()),
             uploaded_at: Some(at("2026-10-01T00:00:00Z")),
             uploaded_by: Some("Jane Doe".into()),
-            meta_etag: None,
             special: false,
             approved_at: Some(at("2026-10-23T10:00:00Z")),
             approved_by: Some("admin".into()),
@@ -462,8 +460,6 @@ mod tests {
             license: "CC0 1.0".into(),
             notes: Some("Shot at base ISO".into()),
             uploaded_at: Some(at("2026-10-23T09:12:00Z")),
-            uploaded_by: Some("Jane Doe".into()),
-            meta_etag: None,
         }
     }
 

@@ -41,6 +41,7 @@ mod enabled {
     pub struct VerifiedIdentity {
         pub sub: String,
         pub preferred_username: Option<String>,
+        #[allow(dead_code)] // kept from the IdP for later use; not read yet
         pub email: Option<String>,
         pub name: Option<String>,
     }

@@ -1,5 +1,5 @@
 //! Authentication primitives: password verification, JWT session cookie,
-//! and a `RequireRole` extractor used by the role-gated admin handlers.
+//! and an `AuthGuard` extractor used by the role-gated admin handlers.
 //!
 //! Two login paths produce the same `Session` JWT cookie:
 //! - **password**: `POST /auth/login` checks `RAWDB_ADMIN_PASSWORD[_HASH]`
@@ -11,13 +11,11 @@
 //! stateless — there is no server-side session store — which keeps the
 //! multi-pod deployment trivial.
 
-use std::sync::Arc;
-
 use argon2::password_hash::PasswordVerifier;
 use argon2::{Argon2, PasswordHash, PasswordHasher};
 use axum::async_trait;
 use axum::extract::{FromRequestParts};
-use axum::http::header::{COOKIE, SET_COOKIE};
+use axum::http::header::COOKIE;
 use axum::http::request::Parts;
 use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Response};
@@ -54,10 +52,6 @@ pub struct Session {
 impl Session {
     pub fn has_role(&self, role: &str) -> bool {
         self.roles.iter().any(|r| r == role)
-    }
-
-    pub fn has_any(&self, roles: &[&str]) -> bool {
-        roles.iter().any(|r| self.has_role(r))
     }
 }
 
@@ -194,11 +188,6 @@ impl FromRequestParts<AppState> for SessionExtractor {
     }
 }
 
-/// Gate handlers behind any of the given roles. The synthetic
-/// `bootstrap:admin` user always satisfies the check; "blocked" users
-/// (per `users.toml`) are rejected.
-pub struct RequireRole<const ROLE_BITS: u8>;
-
 pub const REVIEWER_BIT: u8 = 0b0_0001;
 pub const ADMIN_BIT: u8 = 0b0_0010;
 pub const APPROVER_BIT: u8 = 0b0_0100;
@@ -220,6 +209,9 @@ const ROLE_BIT_TABLE: &[(u8, &str)] = &[
     (DELETER_BIT, ROLE_DELETER),
 ];
 
+/// Gate handlers behind any of the given roles. The synthetic
+/// `bootstrap:admin` user always satisfies the check; "blocked" users
+/// (per `users.toml`) are rejected.
 pub struct AuthGuard<const ROLE_BITS: u8>(pub Session);
 
 #[async_trait]
@@ -271,19 +263,6 @@ fn extract_cookie(parts: &Parts, name: &str) -> Option<String> {
         }
     }
     None
-}
-
-// ---- header helper for setting cookies on responses ----------------------
-
-pub fn with_session_cookie(cfg: &Arc<Config>, token: &str, mut resp: Response) -> Response {
-    resp.headers_mut()
-        .append(SET_COOKIE, set_cookie_header(cfg, token));
-    resp
-}
-
-pub fn with_cleared_cookie(mut resp: Response) -> Response {
-    resp.headers_mut().append(SET_COOKIE, clear_cookie_header());
-    resp
 }
 
 #[cfg(test)]
