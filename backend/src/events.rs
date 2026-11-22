@@ -118,6 +118,26 @@ impl RawdbEvents {
         });
     }
 
+    /// Emit `Normal SetRenamed`. Caller is the admin's `sub`.
+    pub fn set_renamed(
+        &self,
+        old_maker: &str,
+        old_model: &str,
+        new_maker: &str,
+        new_model: &str,
+        by_sub: &str,
+    ) {
+        self.publish(Event {
+            type_: EventType::Normal,
+            reason: "SetRenamed".into(),
+            note: Some(format!(
+                "{by_sub} renamed {old_maker}/{old_model} to {new_maker}/{new_model}"
+            )),
+            action: "Rename".into(),
+            secondary: None,
+        });
+    }
+
     /// Emit `Normal UploadCreated`. Caller is the uploader's `sub`.
     pub fn upload_created(&self, maker: &str, model: &str, by_sub: &str) {
         self.publish(Event {

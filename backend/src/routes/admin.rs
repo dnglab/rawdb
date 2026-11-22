@@ -6,7 +6,7 @@
 //! - `approver`: view pending uploads, approve or reject them.
 //! - `editor`: edit approved-set metadata and rename files; never deletes.
 //! - `deleter`: delete single files or whole approved sets.
-//! - `admin`: everything, plus user management.
+//! - `admin`: everything, plus renaming approved sets and user management.
 
 use axum::extract::{Path, State};
 use axum::http::header::{
@@ -52,6 +52,7 @@ pub fn router() -> Router<AppState> {
             "/sets/:maker/:model",
             axum::routing::put(edit_set).delete(delete_set),
         )
+        .route("/sets/:maker/:model/rename", post(rename_set))
         .route(
             "/sets/:maker/:model/files/*path",
             axum::routing::delete(delete_set_file),
@@ -487,7 +488,8 @@ pub struct EditSetRequest {
 
 /// Edit an already-approved set in place: rename files, edit per-file
 /// tags/notes/license, and edit set-level license/notes/uploaded_by.
-/// `maker`/`model` are the set's identity and are not editable here.
+/// `maker`/`model` are the set's identity and are not editable here
+/// (admins rename via `POST /api/admin/sets/{maker}/{model}/rename`).
 /// Never removes files: every existing file must appear in `files`
 /// (removal is `DELETE /api/admin/sets/{maker}/{model}/files/{path}`).
 #[utoipa::path(
@@ -802,6 +804,206 @@ pub async fn delete_set_file(
     )
     .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RenameSetRequest {
+    /// New camera maker.
+    pub maker: String,
+    /// New camera model.
+    pub model: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RenameSetResponse {
+    /// The set's new identity, as stored (trimmed).
+    pub maker: String,
+    pub model: String,
+}
+
+/// Rename an approved set to a new `(maker, model)`: moves every object
+/// from `samples/<maker>/<model>/` to the new prefix and rewrites the
+/// meta's identity. Everything else (approval record, upload date,
+/// per-file metadata) is carried over unchanged. Admin only.
+///
+/// Refuses when a set (or any object) already exists under the new name.
+/// S3 has no rename, so this is copy-then-delete: a failure after the new
+/// meta is written leaves both sets in place, never neither. A renamed set
+/// shows up as a new entry in the published-samples Atom feed (entry IDs
+/// contain the set URL). Pending uploads naming the old maker/model are
+/// not touched.
+#[utoipa::path(
+    post,
+    path = "/api/admin/sets/{maker}/{model}/rename",
+    tag = "admin",
+    security(("session_cookie" = [])),
+    params(
+        ("maker" = String, Path, description = "Current camera maker"),
+        ("model" = String, Path, description = "Current camera model"),
+    ),
+    request_body = RenameSetRequest,
+    responses(
+        (status = 200, body = RenameSetResponse),
+        (status = 400, description = "Invalid name, or the name is unchanged"),
+        (status = 403, description = "Admin only"),
+        (status = 404, description = "Set does not exist"),
+        (status = 409, description = "A set already exists under the new name"),
+    ),
+)]
+pub async fn rename_set(
+    auth: AuthGuard<ADMIN_ONLY>,
+    State(state): State<AppState>,
+    Path((maker, model)): Path<(String, String)>,
+    Json(req): Json<RenameSetRequest>,
+) -> AppResult<Json<RenameSetResponse>> {
+    let new_maker = validate_set_name("maker", &req.maker)?;
+    let new_model = validate_set_name("model", &req.model)?;
+    if new_maker == maker && new_model == model {
+        return Err(AppError::BadRequest(
+            "new maker/model equal the current ones; nothing to rename".into(),
+        ));
+    }
+
+    let existing = state
+        .db
+        .get_set(&maker, &model)
+        .map_err(AppError::Other)?
+        .ok_or(AppError::NotFound)?;
+
+    let old_prefix = format!("samples/{maker}/{model}/");
+    let new_prefix = format!("samples/{new_maker}/{new_model}/");
+
+    // Target must be free. The S3 listing also catches a set this pod's
+    // cache hasn't picked up yet, and orphaned objects we'd mix into.
+    let target_taken = state
+        .db
+        .get_set(&new_maker, &new_model)
+        .map_err(AppError::Other)?
+        .is_some()
+        || !state
+            .s3
+            .list_objects(&new_prefix)
+            .await
+            .map_err(AppError::Other)?
+            .is_empty();
+    if target_taken {
+        return Err(AppError::Conflict(format!(
+            "set {new_maker}/{new_model} already exists"
+        )));
+    }
+
+    // Strict load: the meta is rewritten under the new prefix, so a
+    // missing/unreadable one must fail rather than be treated as empty.
+    let meta_key = format!("{old_prefix}rawdb-meta.toml");
+    let (bytes, _) = state.s3.get_bytes(&meta_key).await.map_err(|e| match e {
+        S3Error::NotFound(_) | S3Error::PreconditionFailed => AppError::NotFound,
+        S3Error::Other(e) => AppError::Other(e),
+    })?;
+    let toml = String::from_utf8(bytes)
+        .map_err(|e| AppError::Other(anyhow::anyhow!("meta not UTF-8: {e}")))?;
+    let mut parsed = meta::parse(&toml)
+        .map_err(|e| AppError::Other(anyhow::anyhow!("invalid meta: {e}")))?;
+    parsed.set.maker = new_maker.clone();
+    parsed.set.model = new_model.clone();
+    // Pin `uploaded_at`: without it the scanner falls back to the meta
+    // object's LastModified, which the write below would reset to now.
+    if parsed.set.uploaded_at.is_none() {
+        parsed.set.uploaded_at = match existing.uploaded_at {
+            Some(at) => Some(at),
+            None => state
+                .s3
+                .head(&meta_key)
+                .await
+                .map_err(AppError::Other)?
+                .and_then(|h| h.last_modified),
+        };
+    }
+
+    // Copy all objects but the meta in parallel (as in approve_pending).
+    // On failure, clean up the partial target; the source is untouched.
+    let objects = state
+        .s3
+        .list_objects(&old_prefix)
+        .await
+        .map_err(AppError::Other)?;
+    let copies = objects
+        .iter()
+        .filter(|o| o.key != meta_key)
+        .filter_map(|o| o.key.strip_prefix(&old_prefix))
+        .map(|rel| {
+            let s3 = state.s3.clone();
+            let src = format!("{old_prefix}{rel}");
+            let dst = format!("{new_prefix}{rel}");
+            async move { s3.copy(&src, &dst).await }
+        });
+    if let Err(e) = futures::future::try_join_all(copies).await {
+        if let Err(cleanup) = state.s3.delete_prefix(&new_prefix).await {
+            tracing::warn!(error = ?cleanup, prefix = %new_prefix, "rename_set: cleanup failed");
+        }
+        return Err(AppError::Other(e));
+    }
+
+    // Meta last: a half-copied target has no meta and so is never a set.
+    state
+        .s3
+        .put_bytes(
+            &format!("{new_prefix}rawdb-meta.toml"),
+            meta::to_toml(&parsed).into_bytes(),
+            Some("application/toml"),
+            None,
+            None,
+        )
+        .await
+        .map_err(|e| AppError::Other(anyhow::anyhow!("write meta: {e}")))?;
+
+    let delete_result = state.s3.delete_prefix(&old_prefix).await;
+
+    // Refresh both keys either way: on a failed delete both sets exist and
+    // the cache should show that.
+    if let Err(e) = state.scanner.refresh_one_set(&maker, &model).await {
+        tracing::warn!(error = ?e, "rename_set: refresh old failed");
+    }
+    if let Err(e) = state.scanner.refresh_one_set(&new_maker, &new_model).await {
+        tracing::warn!(error = ?e, "rename_set: refresh new failed");
+    }
+    crate::sync_tick::bump(
+        &state,
+        &[crate::sync_tick::Domain::Sets],
+        "rename_set",
+    )
+    .await;
+
+    if let Err(e) = delete_result {
+        tracing::error!(
+            error = ?e, from = %old_prefix, to = %new_prefix,
+            "rename_set: copied but failed to delete the old set",
+        );
+        return Err(AppError::Other(anyhow::anyhow!(
+            "set copied to {new_maker}/{new_model}, but deleting {maker}/{model} \
+             failed ({e}); both now exist — remove the old one via \
+             DELETE /api/admin/sets/{{maker}}/{{model}}"
+        )));
+    }
+
+    state
+        .events
+        .set_renamed(&maker, &model, &new_maker, &new_model, &auth.0.sub);
+    Ok(Json(RenameSetResponse {
+        maker: new_maker,
+        model: new_model,
+    }))
+}
+
+/// Trimmed `value` if it's usable as one segment of a set's S3 prefix.
+fn validate_set_name(field: &str, value: &str) -> AppResult<String> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err(AppError::BadRequest(format!("{field} is required")));
+    }
+    if v.contains('/') || v == "." || v == ".." || v.chars().any(char::is_control) {
+        return Err(AppError::BadRequest(format!("invalid {field}: {v:?}")));
+    }
+    Ok(v.to_string())
 }
 
 #[derive(Debug, Deserialize, Default, ToSchema)]
@@ -1620,4 +1822,25 @@ async fn load_existing_file_meta(
         .into_iter()
         .map(|f| (f.path.clone(), f))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_name_is_trimmed() {
+        assert_eq!(validate_set_name("model", "  EOS R5 ").unwrap(), "EOS R5");
+        assert_eq!(validate_set_name("model", "α7 IV").unwrap(), "α7 IV");
+    }
+
+    #[test]
+    fn set_name_rejects_unusable_segments() {
+        for bad in ["", "   ", "EOS/R5", "/", ".", "..", " .. ", "EOS\nR5", "a\u{0}b"] {
+            assert!(
+                matches!(validate_set_name("model", bad), Err(AppError::BadRequest(_))),
+                "accepted {bad:?}"
+            );
+        }
+    }
 }
