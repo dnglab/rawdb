@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
 import { useConfirm } from 'primevue/useconfirm';
@@ -12,8 +12,9 @@ const props = defineProps<{ maker: string; model: string }>();
 const router = useRouter();
 const toast = useToast();
 const confirm = useConfirm();
-// `editor` edits metadata/renames; `deleter` removes files or the set.
-const { canEditSets, canDeleteSets } = useAuth();
+// `editor` edits metadata/renames files; `deleter` removes files or the
+// set; only `admin` renames the set itself (maker/model).
+const { isAdmin, canEditSets, canDeleteSets } = useAuth();
 
 interface Row {
   old_path: string;
@@ -33,6 +34,7 @@ const setForm = reactive({
   notes: '',
   special: false,
 });
+const renameForm = reactive({ maker: '', model: '' });
 const files = ref<Row[]>([]);
 const loaded = ref(false);
 const loading = ref(false);
@@ -170,6 +172,60 @@ function deleteSet() {
   });
 }
 
+function resetRenameForm() {
+  renameForm.maker = props.maker;
+  renameForm.model = props.model;
+}
+
+const renameReady = computed(() => {
+  const maker = renameForm.maker.trim();
+  const model = renameForm.model.trim();
+  return (
+    maker !== '' &&
+    model !== '' &&
+    (maker !== props.maker || model !== props.model)
+  );
+});
+
+function renameSet() {
+  const to = { maker: renameForm.maker.trim(), model: renameForm.model.trim() };
+  confirm.require({
+    message:
+      `Rename ${props.maker} ${props.model} to ${to.maker} ${to.model}? ` +
+      'Files are moved in storage; links to the old name stop working. ' +
+      'Unsaved edits below are discarded.',
+    header: 'Rename set',
+    icon: 'pi pi-exclamation-triangle',
+    rejectProps: { label: 'Cancel', severity: 'secondary', outlined: true },
+    acceptProps: { label: 'Rename', severity: 'warn' },
+    accept: async () => {
+      busy.value = true;
+      try {
+        const res = await api.adminSetRename(props.maker, props.model, to);
+        toast.add({
+          severity: 'success',
+          summary: 'Set renamed',
+          detail: `${res.maker} ${res.model}`,
+          life: 3000,
+        });
+        // Same route, new params: the watcher below reloads.
+        await router.replace(
+          `/admin/sets/${encodeURIComponent(res.maker)}/${encodeURIComponent(res.model)}`,
+        );
+      } catch (e) {
+        toast.add({
+          severity: 'error',
+          summary: 'Rename failed',
+          detail: String(e),
+          life: 6000,
+        });
+      } finally {
+        busy.value = false;
+      }
+    },
+  });
+}
+
 async function save() {
   busy.value = true;
   try {
@@ -193,14 +249,22 @@ async function save() {
   }
 }
 
-onMounted(load);
+// Vue Router reuses this component when only the params change (rename).
+watch(
+  () => [props.maker, props.model],
+  () => {
+    resetRenameForm();
+    load();
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
   <section>
     <PageHeader
       :title="`Edit: ${maker} / ${model}`"
-      subtitle="Approved set — maker/model are fixed (set identity)"
+      subtitle="Approved set — maker/model can be renamed by admins"
     >
       <template #actions>
         <Button
@@ -221,6 +285,36 @@ onMounted(load);
     </template>
 
     <template v-else>
+      <Card v-if="isAdmin" class="mb">
+        <template #title>Rename set</template>
+        <template #content>
+          <p class="muted hint">
+            Moves every file to the new maker/model in storage. Refused if a
+            set with that name already exists.
+          </p>
+          <div class="grid">
+            <label class="fld">
+              <span>Maker</span>
+              <InputText v-model="renameForm.maker" :disabled="busy" />
+            </label>
+            <label class="fld">
+              <span>Model</span>
+              <InputText v-model="renameForm.model" :disabled="busy" />
+            </label>
+            <div class="fld rename-action">
+              <Button
+                label="Rename"
+                icon="pi pi-pencil"
+                severity="warn"
+                outlined
+                :disabled="busy || !renameReady"
+                @click="renameSet"
+              />
+            </div>
+          </div>
+        </template>
+      </Card>
+
       <Card class="mb">
         <template #title>Set metadata</template>
         <template #content>
@@ -408,6 +502,10 @@ onMounted(load);
 }
 .wide {
   grid-column: 1 / -1;
+}
+.rename-action {
+  justify-content: flex-end;
+  align-items: flex-start;
 }
 .fld.chk {
   flex-direction: row;

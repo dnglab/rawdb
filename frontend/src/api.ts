@@ -369,6 +369,16 @@ export const api = {
       `/api/admin/sets/${enc(maker)}/${enc(model)}`,
       edit,
     ),
+  /// Admin only. Resolves to the set's new (trimmed) identity.
+  adminSetRename: (
+    maker: string,
+    model: string,
+    to: { maker: string; model: string },
+  ) =>
+    postJSON<{ maker: string; model: string }>(
+      `/api/admin/sets/${enc(maker)}/${enc(model)}/rename`,
+      to,
+    ),
   adminSetDelete: async (maker: string, model: string): Promise<void> => {
     const url = `/api/admin/sets/${enc(maker)}/${enc(model)}`;
     const res = await fetch(url, { method: 'DELETE', credentials: 'same-origin' });

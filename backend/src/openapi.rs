@@ -86,6 +86,7 @@ impl Modify for SecurityAddon {
         admin::inspect_pending,
         admin::edit_set,
         admin::delete_set_file,
+        admin::rename_set,
         admin::delete_set,
         // Admin — user management
         admin::list_users,
@@ -134,6 +135,8 @@ impl Modify for SecurityAddon {
         admin::EditRequest,
         admin::EditFile,
         admin::EditSetRequest,
+        admin::RenameSetRequest,
+        admin::RenameSetResponse,
         admin::ApproveRequest,
         admin::VerifyResult,
         admin::VerifyFile,
